@@ -64,7 +64,7 @@ damageTiltStrength:1.0
 highContrast:false
 highContrastBlockOutline:false
 narratorHotkey:true
-resourcePacks:[]
+resourcePacks:["vanilla","file/Fullbright-UB-1.21 fub-6.0.zip"]
 incompatibleResourcePacks:[]
 lastServer:
 lang:en_us

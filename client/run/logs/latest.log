@@ -157,3 +157,140 @@ com.mojang.authlib.exceptions.InvalidCredentialsException: ForbiddenOperationExc
 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
 	at java.base/java.lang.Thread.run(Thread.java:1474)
+[18:17:46] [Render thread/INFO] (Minecraft) Connecting to localhost, 25601
+[18:17:47] [Download-1/ERROR] (Minecraft) Failed to retrieve profile key pair
+MinecraftClientHttpException[type=HTTP_ERROR, status=401, response=ErrorResponse[path=/player/certificates, error=null, errorMessage=null, details=null]]
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.buildHttpException(MinecraftClient.java:170)
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.readServiceResponse(MinecraftClient.java:147)
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.post(MinecraftClient.java:89)
+	at knot//com.mojang.authlib.yggdrasil.YggdrasilUserApiService.getKeyPair(YggdrasilUserApiService.java:62)
+	at knot//net.minecraft.client.multiplayer.AccountProfileKeyPairManager.fetchProfileKeyPair(AccountProfileKeyPairManager.java:128)
+	at knot//net.minecraft.client.multiplayer.AccountProfileKeyPairManager.lambda$readOrFetchProfileKeyPair$0(AccountProfileKeyPairManager.java:77)
+	at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.run(CompletableFuture.java:1789)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+[18:17:48] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Hash mismatch - starting sync...
+[18:17:48] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Broadcasting 1 known gameIds to the server
+[18:17:48] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Sending requested gameId=487e8a55-0f17-4ad3-9b2e-a7052f55836d
+[18:17:48] [Render thread/INFO] (Minecraft) Resizing Dynamic Transforms UBO, capacity limit of 2 reached during a single frame. New capacity will be 4.
+[18:17:49] [Render thread/INFO] (Minecraft) [System] [CHAT] ➾ You have been moved to [Red Team]
+[18:17:49] [Render thread/INFO] (Minecraft) Resizing Dynamic Transforms UBO, capacity limit of 4 reached during a single frame. New capacity will be 8.
+[18:17:49] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 2 reached during a single frame. New capacity will be 16.
+[18:17:49] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 16 reached during a single frame. New capacity will be 32.
+[18:17:49] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 32 reached during a single frame. New capacity will be 64.
+[18:17:50] [Render thread/INFO] (Minecraft) Resizing Dynamic Transforms UBO, capacity limit of 8 reached during a single frame. New capacity will be 16.
+[18:17:50] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 64 reached during a single frame. New capacity will be 128.
+[18:17:57] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 128 reached during a single frame. New capacity will be 256.
+[18:18:02] [Render thread/INFO] (Minecraft) [System] [CHAT] ➾ You have been moved to [Gray Team]
+[18:18:11] [Netty Epoll IO #0/INFO] (yabranked-client) left ranked match 34daf4b2-7f11-4218-afb5-efc0c2a976d2; fetching result
+[18:18:45] [Render thread/INFO] (Minecraft) Connecting to localhost, 25602
+[18:18:45] [Download-2/ERROR] (Minecraft) Failed to retrieve profile key pair
+MinecraftClientHttpException[type=HTTP_ERROR, status=401, response=ErrorResponse[path=/player/certificates, error=null, errorMessage=null, details=null]]
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.buildHttpException(MinecraftClient.java:170)
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.readServiceResponse(MinecraftClient.java:147)
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.post(MinecraftClient.java:89)
+	at knot//com.mojang.authlib.yggdrasil.YggdrasilUserApiService.getKeyPair(YggdrasilUserApiService.java:62)
+	at knot//net.minecraft.client.multiplayer.AccountProfileKeyPairManager.fetchProfileKeyPair(AccountProfileKeyPairManager.java:128)
+	at knot//net.minecraft.client.multiplayer.AccountProfileKeyPairManager.lambda$readOrFetchProfileKeyPair$0(AccountProfileKeyPairManager.java:77)
+	at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.run(CompletableFuture.java:1789)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+[18:18:46] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Hash mismatch - starting sync...
+[18:18:46] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Broadcasting 1 known gameIds to the server
+[18:18:46] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Sending requested gameId=487e8a55-0f17-4ad3-9b2e-a7052f55836d
+[18:18:46] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev joined the game
+[18:18:47] [Render thread/INFO] (Minecraft) [System] [CHAT] ➾ You have been moved to [Blue Team]
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   BINGO Start!
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Mode: Lockout
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Features: PvP
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Goal: 13 items
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Time Limit: 1h 30m
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Difficulty: 0, 0, 0, 9, 16
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Filter: Everything
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+[18:19:23] [Render thread/WARN] (Minecraft) Received passengers for unknown entity
+[18:19:24] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 256 reached during a single frame. New capacity will be 512.
+[18:19:32] [Render thread/INFO] (Minecraft) Loaded 2 advancements
+[18:19:36] [Render thread/INFO] (Minecraft) Loaded 20 advancements
+[18:19:39] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 512 reached during a single frame. New capacity will be 1024.
+[18:19:40] [Render thread/INFO] (Minecraft) Loaded 21 advancements
+[18:19:49] [Render thread/INFO] (Minecraft) Loaded 24 advancements
+[18:20:10] [Render thread/INFO] (Minecraft) Loaded 35 advancements
+[18:20:12] [Render thread/INFO] (Minecraft) Loaded 43 advancements
+[18:20:13] [Render thread/INFO] (Minecraft) Loaded 46 advancements
+[18:20:44] [Render thread/INFO] (Minecraft) Loaded 56 advancements
+[18:20:50] [Render thread/INFO] (Minecraft) Loaded 66 advancements
+[18:20:51] [Render thread/WARN] (Minecraft) Unable to play empty soundEvent: minecraft:entity.cod.ambient
+[18:28:13] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Stone Age]
+[18:28:13] [Render thread/INFO] (Minecraft) Loaded 82 advancements
+[18:28:34] [Render thread/INFO] (Minecraft) Loaded 83 advancements
+[18:28:58] [Render thread/INFO] (Minecraft) Loaded 101 advancements
+[18:31:18] [Render thread/INFO] (Minecraft) Reloading ResourceManager: vanilla, fabric-api, fabric-api-base, fabric-api-lookup-api-v1, fabric-biome-api-v1, fabric-block-api-v1, fabric-block-getter-api-v2, fabric-client-gametest-api-v1, fabric-command-api-v2, fabric-content-registries-v0, fabric-convention-tags-v2, fabric-crash-report-info-v1, fabric-creative-tab-api-v1, fabric-data-attachment-api-v1, fabric-data-generation-api-v1, fabric-debug-api-v1, fabric-dimensions-v1, fabric-entity-events-v1, fabric-events-interaction-v0, fabric-game-rule-api-v1, fabric-gametest-api-v1, fabric-item-api-v1, fabric-key-mapping-api-v1, fabric-language-kotlin, fabric-lifecycle-events-v1, fabric-loot-api-v3, fabric-menu-api-v1, fabric-message-api-v1, fabric-model-loading-api-v1, fabric-networking-api-v1, fabric-object-builder-api-v1, fabric-particles-v1, fabric-permission-api-v1, fabric-recipe-api-v1, fabric-registry-sync-v0, fabric-renderer-api-v1, fabric-renderer-indigo, fabric-rendering-fluids-v1, fabric-rendering-v1, fabric-resource-conditions-api-v1, fabric-resource-loader-v0, fabric-resource-loader-v1, fabric-screen-api-v1, fabric-serialization-api-v1, fabric-sound-api-v1, fabric-tag-api-v1, fabric-transfer-api-v1, fabric-transitive-access-wideners-v1, fabricloader, yabranked-client, yet-another-minecraft-bingo, file/Fullbright-UB-1.21 fub-6.0.zip
+[18:31:18] [Worker-Main-19/INFO] (Minecraft) Found unifont_all_no_pua-17.0.01.hex, loading
+[18:31:18] [Worker-Main-5/INFO] (Minecraft) Found unifont_pua-17.0.01.hex, loading
+[18:31:18] [Worker-Main-13/INFO] (Minecraft) Found unifont_jp_patch-17.0.01.hex, loading
+[18:31:19] [Render thread/INFO] (Minecraft) OpenAL initialized on device JBL Quantum350 Wireless Analog Stereo
+[18:31:19] [Render thread/INFO] (Minecraft) Sound engine started
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 512x256x0 minecraft:textures/atlas/particles.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 128x128x0 minecraft:textures/atlas/decorated_pot.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 2048x1024x0 minecraft:textures/atlas/armor_trims.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 512x256x0 minecraft:textures/atlas/paintings.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 1024x512x0 minecraft:textures/atlas/shield_patterns.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 2048x2048x4 minecraft:textures/atlas/blocks.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 512x512x0 minecraft:textures/atlas/chest.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 256x128x0 minecraft:textures/atlas/celestials.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 1024x512x0 minecraft:textures/atlas/banner_patterns.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 1024x512x0 minecraft:textures/atlas/items.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 1024x1024x0 minecraft:textures/atlas/gui.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 128x64x0 minecraft:textures/atlas/map_decorations.png-atlas
+[18:31:19] [Render thread/INFO] (Minecraft) Created: 512x512x0 minecraft:textures/atlas/shulker_boxes.png-atlas
+[18:31:50] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Getting an Upgrade]
+[18:31:50] [Render thread/INFO] (Minecraft) Loaded 105 advancements
+[18:31:52] [Render thread/INFO] (Minecraft) Loaded 107 advancements
+[18:32:24] [Render thread/INFO] (Minecraft) Loaded 110 advancements
+[18:33:05] [Render thread/WARN] (Minecraft) Unable to play empty soundEvent: minecraft:entity.cod.ambient
+[18:33:57] [Render thread/INFO] (Minecraft) Loaded 120 advancements
+[18:34:01] [Render thread/INFO] (Minecraft) Loaded 131 advancements
+[18:34:05] [Render thread/INFO] (Minecraft) Loaded 141 advancements
+[18:34:07] [Render thread/INFO] (Minecraft) Loaded 162 advancements
+[18:34:49] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Acquire Hardware]
+[18:34:49] [Render thread/INFO] (Minecraft) Loaded 191 advancements
+[18:34:51] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev was slain by Drowned
+[18:36:00] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Suit Up]
+[18:36:00] [Render thread/INFO] (Minecraft) Loaded 193 advancements
+[18:37:18] [Render thread/INFO] (Minecraft) Loaded 232 advancements
+[18:37:18] [Render thread/INFO] (Minecraft) Loaded 235 advancements
+[18:37:19] [Render thread/INFO] (Minecraft) Loaded 242 advancements
+[18:37:23] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Monster Hunter]
+[18:37:23] [Render thread/INFO] (Minecraft) Loaded 245 advancements
+[18:38:12] [Render thread/INFO] (Minecraft) Loaded 246 advancements
+[18:38:22] [Render thread/INFO] (Minecraft) Loaded 246 advancements
+[18:38:23] [Render thread/INFO] (Minecraft) Loaded 254 advancements
+[18:38:46] [Render thread/INFO] (Minecraft) Loaded 256 advancements
+[18:38:57] [Render thread/INFO] (Minecraft) Loaded 259 advancements
+[18:38:58] [Render thread/INFO] (Minecraft) Loaded 263 advancements
+[18:39:54] [Render thread/WARN] (Minecraft) Unable to play empty soundEvent: minecraft:entity.salmon.ambient
+[18:40:32] [Render thread/INFO] (Minecraft) Loaded 274 advancements
+[18:40:53] [Render thread/INFO] (Minecraft) Loaded 275 advancements
+[18:42:09] [Render thread/INFO] (Minecraft) Loaded 277 advancements
+[18:42:22] [Render thread/INFO] (Minecraft) Loaded 277 advancements
+[18:42:40] [Render thread/INFO] (Minecraft) Loaded 299 advancements
+[18:43:25] [Render thread/INFO] (Minecraft) Loaded 299 advancements
+[18:43:31] [Render thread/INFO] (Minecraft) [System] [CHAT] Respawn point set
+[18:43:35] [Render thread/INFO] (Minecraft) Loaded 300 advancements
+[18:43:36] [Render thread/INFO] (Minecraft) Loaded 303 advancements
+[18:43:39] [Render thread/INFO] (Minecraft) Loaded 306 advancements
+[18:44:00] [Render thread/INFO] (Minecraft) Loaded 307 advancements
+[18:44:14] [Render thread/INFO] (Minecraft) Loaded 309 advancements
+[18:44:44] [Render thread/INFO] (Minecraft) Loaded 311 advancements
+[18:45:17] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [What a Deal!]
+[18:45:17] [Render thread/INFO] (Minecraft) Loaded 312 advancements
+[18:51:26] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev was slain by Zombie
+[18:53:52] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev was slain by Drowned
+[18:54:38] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev was slain by Drowned
+[18:55:24] [Render thread/INFO] (Minecraft) Villager Villager['Villager'/23509, l='ClientLevel', x=604.28, y=78.00, z=84.70] died, message: 'Villager died'
+[18:55:38] [Render thread/INFO] (Minecraft) Loaded 314 advancements
+[18:55:40] [Render thread/INFO] (Minecraft) Loaded 323 advancements

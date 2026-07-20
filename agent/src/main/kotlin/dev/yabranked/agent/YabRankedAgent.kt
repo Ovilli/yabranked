@@ -126,7 +126,12 @@ class YabRankedAgent : DedicatedServerModInitializer {
             // majority of the 25 tiles, always decided in lockout (a lines
             // goal can stalemate, which YAB itself warns about)
             val ok = command(server, "bingo mode lockout true") &&
-                command(server, "bingo goal 13 items") &&
+                // classic bingo: first completed line wins. Lockout can in
+                // principle deadlock every line, so leave YAB's stalemate
+                // handling on (end_game) as the safety net rather than
+                // switching to an items goal, which drags matches out.
+                command(server, "bingo goal 1 lines") &&
+                command(server, "bingo options stalemate end_game") &&
                 command(server, "bingo options end_when first_win") &&
                 command(server, "bingo timelimit ${config.timeLimitMinutes}") &&
                 command(server, "bingo card seed ${config.cardSeed}") &&

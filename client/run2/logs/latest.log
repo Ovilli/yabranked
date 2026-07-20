@@ -157,3 +157,53 @@ com.mojang.authlib.exceptions.InvalidCredentialsException: ForbiddenOperationExc
 	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
 	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
 	at java.base/java.lang.Thread.run(Thread.java:1474)
+[18:18:45] [Render thread/INFO] (Minecraft) Connecting to localhost, 25602
+[18:18:45] [Download-4/ERROR] (Minecraft) Failed to retrieve profile key pair
+MinecraftClientHttpException[type=HTTP_ERROR, status=401, response=ErrorResponse[path=/player/certificates, error=null, errorMessage=null, details=null]]
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.buildHttpException(MinecraftClient.java:170)
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.readServiceResponse(MinecraftClient.java:147)
+	at knot//com.mojang.authlib.minecraft.client.MinecraftClient.post(MinecraftClient.java:89)
+	at knot//com.mojang.authlib.yggdrasil.YggdrasilUserApiService.getKeyPair(YggdrasilUserApiService.java:62)
+	at knot//net.minecraft.client.multiplayer.AccountProfileKeyPairManager.fetchProfileKeyPair(AccountProfileKeyPairManager.java:128)
+	at knot//net.minecraft.client.multiplayer.AccountProfileKeyPairManager.lambda$readOrFetchProfileKeyPair$0(AccountProfileKeyPairManager.java:77)
+	at java.base/java.util.concurrent.CompletableFuture$AsyncSupply.run(CompletableFuture.java:1789)
+	at java.base/java.util.concurrent.ThreadPoolExecutor.runWorker(ThreadPoolExecutor.java:1090)
+	at java.base/java.util.concurrent.ThreadPoolExecutor$Worker.run(ThreadPoolExecutor.java:614)
+	at java.base/java.lang.Thread.run(Thread.java:1474)
+[18:18:46] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Hash mismatch - starting sync...
+[18:18:46] [IO-Worker-1/INFO] (bingo) [ClientStatsSyncController] Broadcasting 2 known gameIds to the server
+[18:18:47] [IO-Worker-2/INFO] (bingo) [ClientStatsSyncController] Sending requested gameId=49b2eb0e-cb34-4877-944f-6ebeae03de14
+[18:18:47] [IO-Worker-2/INFO] (bingo) [ClientStatsSyncController] Sending requested gameId=487e8a55-0f17-4ad3-9b2e-a7052f55836d
+[18:18:47] [Render thread/INFO] (Minecraft) Resizing Dynamic Transforms UBO, capacity limit of 2 reached during a single frame. New capacity will be 4.
+[18:18:47] [Render thread/INFO] (Minecraft) [System] [CHAT] ➾ You have been moved to [Red Team]
+[18:18:47] [Render thread/INFO] (Minecraft) Resizing Dynamic Transforms UBO, capacity limit of 4 reached during a single frame. New capacity will be 8.
+[18:18:47] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 2 reached during a single frame. New capacity will be 16.
+[18:18:47] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 16 reached during a single frame. New capacity will be 32.
+[18:18:48] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 32 reached during a single frame. New capacity will be 64.
+[18:18:48] [Render thread/INFO] (Minecraft) Resizing Dynamic Transforms UBO, capacity limit of 8 reached during a single frame. New capacity will be 16.
+[18:18:48] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 64 reached during a single frame. New capacity will be 128.
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   BINGO Start!
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Mode: Lockout
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Features: PvP
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Goal: 13 items
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Time Limit: 1h 30m
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Difficulty: 0, 0, 0, 9, 16
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT]   Filter: Everything
+[18:18:50] [Render thread/INFO] (Minecraft) [System] [CHAT] ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+[18:19:23] [Render thread/WARN] (Minecraft) Received passengers for unknown entity
+[18:19:24] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 128 reached during a single frame. New capacity will be 256.
+[18:19:25] [Render thread/INFO] (Minecraft) Resizing Chunk Sections UBO, capacity limit of 256 reached during a single frame. New capacity will be 512.
+[18:19:32] [Render thread/INFO] (Minecraft) Loaded 2 advancements
+[18:24:06] [Render thread/WARN] (Minecraft) Unable to play empty soundEvent: minecraft:entity.salmon.ambient
+[18:28:13] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Stone Age]
+[18:31:50] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Getting an Upgrade]
+[18:34:49] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Acquire Hardware]
+[18:34:51] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev was slain by Drowned
+[18:34:51] [Render thread/INFO] (Minecraft) Loaded 41 advancements
+[18:36:00] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Suit Up]
+[18:37:23] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [Monster Hunter]
+[18:45:17] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev has made the advancement [What a Deal!]
+[18:51:26] [Render thread/INFO] (Minecraft) [System] [CHAT] AliceDev was slain by Zombie
+[18:53:52] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev was slain by Drowned
+[18:54:38] [Render thread/INFO] (Minecraft) [System] [CHAT] BobDev was slain by Drowned
