@@ -1,6 +1,7 @@
 package dev.yabranked.client
 
 import com.mojang.blaze3d.platform.InputConstants
+import dev.yabranked.client.ui.IconButton
 import dev.yabranked.client.ui.Ui
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
@@ -30,9 +31,16 @@ class YabRankedClient : ClientModInitializer {
         ScreenEvents.AFTER_INIT.register { _, screen, scaledWidth, _ ->
             if (screen is TitleScreen) {
                 Screens.getWidgets(screen).add(
-                    Button.builder(Component.literal("Ranked")) {
+                    IconButton(
+                        x = scaledWidth - 28,
+                        y = 4,
+                        size = 24,
+                        sprite = Ui.logo(),
+                        spriteSize = 16,
+                        label = Component.literal("YAB Ranked"),
+                    ) {
                         Minecraft.getInstance().setScreenAndShow(RankedScreen(screen))
-                    }.bounds(scaledWidth - 64, 4, 60, 20).build()
+                    }
                 )
             }
         }

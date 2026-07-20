@@ -38,8 +38,9 @@ object Ui {
         Identifier.fromNamespaceAndPath("yabranked-client", "textures/gui/$path.png")
 
     /**
-     * Rank crest sprite for the tier, with division pips beneath it.
-     * Sizes are multiples of 16 so the pixel art stays crisp.
+     * Rank crest sprite for the tier. Division is not drawn here — the tier
+     * label next to the crest already reads "Gold II", and pips underneath
+     * collided with the text below them.
      */
     fun rankBadge(g: GuiGraphicsExtractor, x: Int, y: Int, tier: String, size: Int = 16) {
         val sprite = when (tier.substringBefore(' ').lowercase()) {
@@ -57,28 +58,10 @@ object Ui {
             16, 16,
             16, 16,
         )
-
-        val division = when {
-            tier.endsWith(" III") -> 3
-            tier.endsWith(" II") -> 2
-            tier.endsWith(" I") -> 1
-            else -> 0
-        }
-        if (division == 0) return
-
-        // pips are white in the sprite sheet and tinted to the tier colour
-        val pipWidth = size / 2
-        val pipHeight = size / 8
-        g.blit(
-            RenderPipelines.GUI_TEXTURED, texture("rank/pips"),
-            x + (size - pipWidth) / 2, y + size,
-            0f, 0f,
-            pipWidth * division / 3, pipHeight,
-            16 * division / 3, 4,
-            16, 4,
-            tierColor(tier),
-        )
     }
+
+    /** The mod's card glyph, used for the title-screen entry point. */
+    fun logo(): Identifier = texture("logo")
 
     /**
      * Crossed-swords emblem for the match-found screen. Deliberately a symbol

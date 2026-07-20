@@ -235,41 +235,49 @@ class RankedScreen(
         val padLeft = left + 10
         val padRight = right - 10
 
-        // avatar, then name + season
-        Ui.slot(g, padLeft - 2, CARD_TOP + 6, 28)
-        PlayerHeads.draw(g, padLeft, CARD_TOP + 8, 24, profile.uuid, profile.name, tierColor)
-        g.text(font, profile.name, padLeft + 30, CARD_TOP + 8, Ui.WHITE)
-        Ui.textRight(g, font, "Season ${profile.season}", padRight, CARD_TOP + 8, Ui.TEXT_FAINT)
+        // Avatar on the left, crest on the right, text in the column between —
+        // the crest previously sat inline and collided with the line below it.
+        Ui.slot(g, padLeft - 2, CARD_TOP + 8, 28)
+        PlayerHeads.draw(g, padLeft, CARD_TOP + 10, 24, profile.uuid, profile.name, tierColor)
 
-        // tier badge + rating, the headline pair
-        Ui.rankBadge(g, padLeft + 30, CARD_TOP + 19, profile.tier)
-        g.text(font, profile.tier, padLeft + 52, CARD_TOP + 22, tierColor)
-        val ratingText = "${profile.rating}"
-        Ui.textRight(g, font, ratingText, padRight, CARD_TOP + 22, Ui.WHITE)
-        Ui.textRight(g, font, "MMR", padRight - font.width(ratingText) - 4, CARD_TOP + 22, Ui.TEXT_FAINT)
+        Ui.slot(g, padRight - 30, CARD_TOP + 8, 30)
+        Ui.rankBadge(g, padRight - 27, CARD_TOP + 11, profile.tier, size = 24)
 
-        // placements replace the rank line until the player is placed
-        val subtitle = if (profile.placementMatchesRemaining > 0) {
-            "§e${profile.placementMatchesRemaining}§7 placement matches remaining"
-        } else {
-            profile.rank?.let { "§7Rank §f#$it" } ?: "§7Unranked this season"
+        val textLeft = padLeft + 32
+        g.text(font, profile.name, textLeft, CARD_TOP + 9, Ui.WHITE)
+        g.text(font, profile.tier, textLeft, CARD_TOP + 21, tierColor)
+
+        val ratingLine = buildString {
+            append("§f${profile.rating}§7 MMR")
+            profile.rank?.let { append(" §8· §7Rank §f#$it") }
         }
-        g.text(font, subtitle, padLeft + 30, CARD_TOP + 36, Ui.TEXT_DIM)
+        g.text(font, ratingLine, textLeft, CARD_TOP + 33, Ui.TEXT_DIM)
 
-        Ui.divider(g, padLeft, CARD_TOP + 50, CARD_WIDTH - 20)
+        // placements get their own line so they never run into the crest
+        if (profile.placementMatchesRemaining > 0) {
+            g.text(
+                font,
+                "§e${profile.placementMatchesRemaining}§7 placement matches left",
+                textLeft, CARD_TOP + 45, Ui.TEXT_DIM,
+            )
+        } else {
+            g.text(font, "§8Season ${profile.season}", textLeft, CARD_TOP + 45, Ui.TEXT_FAINT)
+        }
+
+        Ui.divider(g, padLeft, CARD_TOP + 60, CARD_WIDTH - 20)
 
         // record + win rate
         val record = "§a${profile.wins}W §7/ §c${profile.losses}L" +
             if (profile.draws > 0) " §7/ §8${profile.draws}D" else ""
-        g.text(font, record, padLeft, CARD_TOP + 58, Ui.WHITE)
+        g.text(font, record, padLeft, CARD_TOP + 68, Ui.WHITE)
         if (profile.wins + profile.losses > 0) {
-            Ui.textRight(g, font, "${Ui.winRatePercent(profile)}% win rate", padRight, CARD_TOP + 58, Ui.TEXT_DIM)
+            Ui.textRight(g, font, "${Ui.winRatePercent(profile)}% win rate", padRight, CARD_TOP + 68, Ui.TEXT_DIM)
         }
-        Ui.winRateBar(g, padLeft, CARD_TOP + 70, CARD_WIDTH - 20, profile.wins, profile.losses, profile.draws)
+        Ui.winRateBar(g, padLeft, CARD_TOP + 80, CARD_WIDTH - 20, profile.wins, profile.losses, profile.draws)
 
         RankedState.lastRatingChange?.let { delta ->
             val text = if (delta >= 0) "▲ +$delta MMR last match" else "▼ $delta MMR last match"
-            g.centeredText(font, text, centerX, CARD_TOP + 80, if (delta >= 0) Ui.WIN else Ui.LOSS)
+            g.centeredText(font, text, centerX, CARD_TOP + 90, if (delta >= 0) Ui.WIN else Ui.LOSS)
         }
     }
 
@@ -302,7 +310,7 @@ class RankedScreen(
 
     private companion object {
         const val CARD_WIDTH = 220
-        const val CARD_HEIGHT = 92
+        const val CARD_HEIGHT = 102
         const val CARD_TOP = 46
     }
 }
