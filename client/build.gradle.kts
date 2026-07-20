@@ -17,6 +17,18 @@ repositories {
 loom {
     // pure client-side mod: compile against the client distribution
     clientOnlyMinecraftJar()
+
+    runs {
+        named("client") {
+            programArgs("--username", "AliceDev")
+        }
+        // second instance for local 1v1 testing: own run dir + username
+        create("client2") {
+            client()
+            runDir("run2")
+            programArgs("--username", "BobDev")
+        }
+    }
 }
 
 dependencies {

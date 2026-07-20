@@ -34,6 +34,8 @@ data class OrchestratorConfig(
     val hostNetwork: Boolean = true,
     /** Optional override for the agent's no-show timeout (seconds). */
     val noShowTimeoutSeconds: Long? = null,
+    /** Optional override for how long the server lingers after a match (seconds). */
+    val postgameSeconds: Long? = null,
     /** How long a match may stay PENDING before it is voided and reaped. */
     val readyTimeout: Duration = 10.minutes,
 )
@@ -76,6 +78,7 @@ class MatchOrchestrator(
             put("SERVER_PORT", containerPort.toString())
             put("ONLINE_MODE", config.onlineMode.toString())
             config.noShowTimeoutSeconds?.let { put("YABRANKED_NO_SHOW_TIMEOUT_SECONDS", it.toString()) }
+            config.postgameSeconds?.let { put("YABRANKED_POSTGAME_SECONDS", it.toString()) }
         } + mapOf(
             "YABRANKED_WORLD_SEED" to match.settings.worldSeed.toString(),
             "YABRANKED_BACKEND_URL" to config.backendUrlForAgents,

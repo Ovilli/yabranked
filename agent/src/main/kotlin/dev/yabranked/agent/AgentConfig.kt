@@ -18,6 +18,10 @@ data class AgentConfig(
     val playerB: ExpectedPlayer,
     /** Seconds to wait for both players before voiding the match. */
     val noShowTimeoutSeconds: Long,
+    /** Seconds to keep the server up after a match so players can review results. */
+    val postgameSeconds: Long,
+    /** Seconds a disconnected player has to return before forfeiting. */
+    val forfeitSeconds: Long,
 ) {
     data class ExpectedPlayer(val uuid: UUID, val name: String)
 
@@ -41,6 +45,8 @@ data class AgentConfig(
                 playerA = ExpectedPlayer(playerAUuid, playerAName),
                 playerB = ExpectedPlayer(playerBUuid, playerBName),
                 noShowTimeoutSeconds = env["YABRANKED_NO_SHOW_TIMEOUT_SECONDS"]?.toLongOrNull() ?: 300,
+                postgameSeconds = env["YABRANKED_POSTGAME_SECONDS"]?.toLongOrNull() ?: 180,
+                forfeitSeconds = env["YABRANKED_FORFEIT_SECONDS"]?.toLongOrNull() ?: 90,
             )
         }
 

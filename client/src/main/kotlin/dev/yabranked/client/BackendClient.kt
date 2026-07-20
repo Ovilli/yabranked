@@ -49,11 +49,13 @@ class BackendClient(
     fun authenticate(username: String, joinServer: (serverId: String) -> Unit): AuthResult {
         val serverId = BigInteger(160, SecureRandom()).toString(16)
 
+        // If the Mojang handshake fails (offline/dev account) we still send the
+        // request — the backend's hasJoined check is authoritative and will
+        // reject it unless it runs in fake-auth mode.
         try {
             joinServer(serverId)
         } catch (e: Exception) {
-            log.warn("Mojang joinServer failed", e)
-            return AuthResult.Failed("Mojang session rejected (offline account?)")
+            log.warn("Mojang joinServer failed (offline/dev account?) — proceeding, backend decides", e)
         }
 
         val body = json.encodeToString(

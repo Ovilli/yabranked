@@ -111,6 +111,7 @@ fun main(args: Array<String>) {
                 onlineMode = System.getenv("YABRANKED_ONLINE_MODE") != "false",
                 hostNetwork = System.getenv("YABRANKED_HOST_NETWORK") != "false",
                 noShowTimeoutSeconds = System.getenv("YABRANKED_NO_SHOW_TIMEOUT_SECONDS")?.toLongOrNull(),
+                postgameSeconds = System.getenv("YABRANKED_POSTGAME_SECONDS")?.toLongOrNull(),
             ),
             runtime = DockerCliRuntime(),
             matchService = matchService,

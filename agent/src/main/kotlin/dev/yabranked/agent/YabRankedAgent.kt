@@ -24,6 +24,14 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
     private enum class Phase { CONFIGURING, WAITING_FOR_PLAYERS, PLAYING, REPORTED }
 
+    private companion object {
+        /** ~60s of 3s retries for YAB to reach PREGAME and accept config. */
+        const val MAX_CONFIG_ATTEMPTS = 20
+        /** ~30s of 1s retries for a joining player to become resolvable. */
+        const val MAX_ASSIGN_ATTEMPTS = 30
+        const val MAX_START_ATTEMPTS = 10
+    }
+
     private lateinit var config: AgentConfig
     private lateinit var reporter: BackendReporter
     private var server: MinecraftServer? = null
@@ -34,6 +42,9 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
     /** Set when the agent decides the outcome itself (abandon/no-show). */
     private val forcedOutcome = AtomicReference<WireOutcome?>(null)
+
+    private val assignedPlayers = java.util.concurrent.ConcurrentHashMap.newKeySet<UUID>()
+    private val startRequested = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun onInitializeServer() {
         val parsed = AgentConfig.fromEnv()
@@ -63,40 +74,93 @@ class YabRankedAgent : DedicatedServerModInitializer {
         BingoEvents.GAME_ENDED.register { event -> onGameEnded(event) }
     }
 
-    private fun command(server: MinecraftServer, command: String) {
-        log.info("[yabranked] > /$command")
-        server.commands.performPrefixedCommand(server.createCommandSourceStack(), command)
+    /**
+     * Executes a command through the Brigadier dispatcher so failures are
+     * detectable — YAB's command tree silently rejects (e.g. "Incorrect
+     * argument") when its game scope is not in the expected state yet.
+     */
+    private fun command(server: MinecraftServer, command: String): Boolean {
+        return try {
+            server.commands.dispatcher.execute(command, server.createCommandSourceStack())
+            log.info("[yabranked] > /$command  OK")
+            true
+        } catch (e: Exception) {
+            log.warn("[yabranked] > /$command  FAILED: ${e.message}")
+            false
+        }
     }
 
     private fun onServerStarted(server: MinecraftServer) {
         this.server = server
+        scheduler.execute { configureWithRetry(server, attempt = 1) }
+    }
 
-        // configure the ranked match; the card seed makes the board deterministic
-        command(server, "bingo mode lockout true")
-        // majority of the 25 tiles — lockout with a lines goal can stalemate,
-        // 13 items is always decided (or a draw on time limit, which Elo handles)
-        command(server, "bingo goal 13 items")
-        command(server, "bingo options end_when first_win")
-        command(server, "bingo timelimit ${config.timeLimitMinutes}")
-        command(server, "bingo card seed ${config.cardSeed}")
-
-        phase.set(Phase.WAITING_FOR_PLAYERS)
-
-        if (reporter.reportReady()) {
-            log.info("[yabranked] reported ready for match ${config.matchId}")
-        } else {
-            log.error("[yabranked] could not report ready; players will not be sent here — shutting down")
-            scheduleShutdown(server, delaySeconds = 5)
+    /**
+     * YAB initializes its game scope after SERVER_STARTED, so the config
+     * commands are retried until the API reports PREGAME and every command
+     * verifies. Only then does the backend learn the server is ready.
+     */
+    private fun configureWithRetry(server: MinecraftServer, attempt: Int) {
+        if (attempt > MAX_CONFIG_ATTEMPTS) {
+            log.error("[yabranked] could not configure YAB after $MAX_CONFIG_ATTEMPTS attempts; voiding match")
+            forcedOutcome.set(WireOutcome.VOID)
+            reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
             return
         }
 
-        noShowTimer = scheduler.schedule({
-            if (phase.get() == Phase.WAITING_FOR_PLAYERS) {
-                log.warn("[yabranked] players did not arrive within ${config.noShowTimeoutSeconds}s; voiding match")
-                forcedOutcome.set(WireOutcome.VOID)
-                reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+        val retry = Runnable {
+            scheduler.schedule({ configureWithRetry(server, attempt + 1) }, 3, TimeUnit.SECONDS)
+        }
+
+        val api = BingoApi.INSTANCE
+        if (api == null || api.game.status != me.jfenn.bingo.api.data.BingoGameStatus.PREGAME) {
+            log.info("[yabranked] YAB not in PREGAME yet (attempt $attempt); retrying")
+            retry.run()
+            return
+        }
+
+        // run on the server thread; report the result back to the agent thread
+        val configured = java.util.concurrent.CompletableFuture<Boolean>()
+        server.execute {
+            // card seed makes the board deterministic; goal is 13 items —
+            // majority of the 25 tiles, always decided in lockout (a lines
+            // goal can stalemate, which YAB itself warns about)
+            val ok = command(server, "bingo mode lockout true") &&
+                command(server, "bingo goal 13 items") &&
+                command(server, "bingo options end_when first_win") &&
+                command(server, "bingo timelimit ${config.timeLimitMinutes}") &&
+                command(server, "bingo card seed ${config.cardSeed}") &&
+                // the locator bar points straight at the opponent — in a race
+                // for the same items that hands away their whole strategy
+                command(server, "gamerule locator_bar false")
+            configured.complete(ok)
+        }
+
+        scheduler.execute {
+            if (configured.get(30, TimeUnit.SECONDS) != true) {
+                log.warn("[yabranked] config attempt $attempt failed; retrying")
+                retry.run()
+                return@execute
             }
-        }, config.noShowTimeoutSeconds, TimeUnit.SECONDS)
+
+            phase.set(Phase.WAITING_FOR_PLAYERS)
+
+            if (reporter.reportReady()) {
+                log.info("[yabranked] reported ready for match ${config.matchId}")
+            } else {
+                log.error("[yabranked] could not report ready; players will not be sent here — shutting down")
+                scheduleShutdown(server, delaySeconds = 5)
+                return@execute
+            }
+
+            noShowTimer = scheduler.schedule({
+                if (phase.get() == Phase.WAITING_FOR_PLAYERS) {
+                    log.warn("[yabranked] players did not arrive within ${config.noShowTimeoutSeconds}s; voiding match")
+                    forcedOutcome.set(WireOutcome.VOID)
+                    reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+                }
+            }, config.noShowTimeoutSeconds, TimeUnit.SECONDS)
+        }
     }
 
     private fun expectedPlayer(uuid: UUID): AgentConfig.ExpectedPlayer? = when (uuid) {
@@ -121,19 +185,67 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
         if (phase.get() != Phase.WAITING_FOR_PLAYERS) return
 
-        val online = server.playerList.players.map { it.uuid }.toSet()
-        if (config.playerA.uuid in online && config.playerB.uuid in online) {
-            log.info("[yabranked] both players present; assigning teams and starting")
+        log.info("[yabranked] ${expected.name} joined; assigning team")
+        val team = if (uuid == config.playerA.uuid) "red" else "blue"
+        assignTeam(server, expected, team, attempt = 1)
+    }
+
+    /**
+     * The JOIN event fires before the player is registered in the player list,
+     * so `/join <team> <player>` cannot resolve them yet. Retry until the
+     * player is resolvable and the command actually succeeds.
+     */
+    private fun assignTeam(server: MinecraftServer, player: AgentConfig.ExpectedPlayer, team: String, attempt: Int) {
+        if (attempt > MAX_ASSIGN_ATTEMPTS) {
+            log.error("[yabranked] could not assign ${player.name} to $team; voiding match")
+            forcedOutcome.set(WireOutcome.VOID)
+            reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+            return
+        }
+
+        scheduler.schedule({
             server.execute {
-                command(server, "join red ${config.playerA.name}")
-                command(server, "join blue ${config.playerB.name}")
-            }
-            // small delay so team assignment and spawn placement settle before start
-            scheduler.schedule({
-                server.execute {
-                    command(server, "bingo start ignore_warnings")
+                if (server.playerList.getPlayerByName(player.name) == null) {
+                    assignTeam(server, player, team, attempt + 1)
+                    return@execute
                 }
-            }, 3, TimeUnit.SECONDS)
+                if (command(server, "join $team ${player.name}")) {
+                    assignedPlayers += player.uuid
+                    startWhenBothAssigned(server)
+                } else {
+                    assignTeam(server, player, team, attempt + 1)
+                }
+            }
+        }, 1, TimeUnit.SECONDS)
+    }
+
+    private fun startWhenBothAssigned(server: MinecraftServer) {
+        if (config.playerA.uuid !in assignedPlayers || config.playerB.uuid !in assignedPlayers) return
+        if (!startRequested.compareAndSet(false, true)) return
+
+        log.info("[yabranked] both players on teams; starting game")
+        // let team assignment and spawn placement settle before starting
+        scheduler.schedule({ startGame(server, attempt = 1) }, 3, TimeUnit.SECONDS)
+    }
+
+    private fun startGame(server: MinecraftServer, attempt: Int) {
+        if (attempt > MAX_START_ATTEMPTS) {
+            log.error("[yabranked] could not start the game; voiding match")
+            forcedOutcome.set(WireOutcome.VOID)
+            reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+            return
+        }
+        server.execute {
+            // "ignore_warnings" skips the soft checks, not the team requirement
+            if (!command(server, "bingo start ignore_warnings")) {
+                scheduler.schedule({ startGame(server, attempt + 1) }, 2, TimeUnit.SECONDS)
+            }
+        }
+    }
+
+    private fun announce(server: MinecraftServer, text: String) {
+        server.execute {
+            server.playerList.broadcastSystemMessage(Component.literal(text), false)
         }
     }
 
@@ -141,17 +253,46 @@ class YabRankedAgent : DedicatedServerModInitializer {
         val leaver = expectedPlayer(uuid) ?: return
         if (phase.get() != Phase.PLAYING) return
 
-        log.warn("[yabranked] ${leaver.name} disconnected mid-match; forfeit in 120s unless they return")
-        abandonTimer = scheduler.schedule({
-            val online = server.playerList.players.map { it.uuid }.toSet()
-            if (uuid !in online && phase.get() == Phase.PLAYING) {
-                val winner = if (uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN else WireOutcome.TEAM_A_WIN
-                log.warn("[yabranked] ${leaver.name} did not return; opponent wins by forfeit")
-                forcedOutcome.set(winner)
-                server.execute { command(server, "bingo end") }
-                // onGameEnded picks up forcedOutcome from here
+        val opponent = if (uuid == config.playerA.uuid) config.playerB else config.playerA
+        val forfeitSeconds = config.forfeitSeconds
+        log.warn("[yabranked] ${leaver.name} disconnected mid-match; forfeit in ${forfeitSeconds}s unless they return")
+
+        // Tell the player still in the match what is happening — otherwise the
+        // wait looks like the server simply stopped responding.
+        announce(server, "§c${leaver.name} disconnected. §7You win by forfeit in §e${forfeitSeconds}s§7 if they don't return.")
+        for (remaining in listOf(60L, 15L)) {
+            if (forfeitSeconds > remaining) {
+                scheduler.schedule(
+                    {
+                        if (phase.get() == Phase.PLAYING && server.playerList.getPlayer(uuid) == null) {
+                            announce(server, "§7Forfeit in §e${remaining}s§7...")
+                        }
+                    },
+                    forfeitSeconds - remaining,
+                    TimeUnit.SECONDS,
+                )
             }
-        }, 120, TimeUnit.SECONDS)
+        }
+
+        abandonTimer = scheduler.schedule({
+            if (phase.get() != Phase.PLAYING) return@schedule
+            val online = server.playerList.players.map { it.uuid }.toSet()
+            if (uuid in online) return@schedule // they came back
+
+            if (opponent.uuid !in online) {
+                // both players are gone — there is no one to award the win to
+                log.warn("[yabranked] both players disconnected; voiding match")
+                forcedOutcome.set(WireOutcome.VOID)
+            } else {
+                log.warn("[yabranked] ${leaver.name} did not return; ${opponent.name} wins by forfeit")
+                forcedOutcome.set(
+                    if (uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN else WireOutcome.TEAM_A_WIN
+                )
+                announce(server, "§6${opponent.name} wins by forfeit — §7${leaver.name} did not return.")
+            }
+            server.execute { command(server, "bingo end") }
+            // onGameEnded picks up forcedOutcome from here
+        }, forfeitSeconds, TimeUnit.SECONDS)
     }
 
     private fun teamScore(playerUuid: UUID): Int {
@@ -197,9 +338,35 @@ class YabRankedAgent : DedicatedServerModInitializer {
             if (!reporter.reportResult(report)) {
                 log.error("[yabranked] FAILED to deliver result after retries; container logs are the evidence")
             }
-            // leave the server up briefly so players can see the results screen
-            scheduleShutdown(server, delaySeconds = 30)
+            // Keep the server up so players can read YAB's game-over screen
+            // (scored items, times, winner) instead of being kicked mid-celebration.
+            lingerThenShutdown(server)
         }
+    }
+
+    /**
+     * Post-match linger: players stay on the server with the results screen up
+     * and are warned before the server closes, so the disconnect is never a
+     * surprise. They leave whenever they want; the container dies either way.
+     */
+    private fun lingerThenShutdown(server: MinecraftServer) {
+        val linger = config.postgameSeconds
+        log.info("[yabranked] match over; keeping server up for ${linger}s so players can review the results")
+
+        announce(server, "§6Match complete! §7Results are on screen — queue again from the Ranked menu when you're ready.")
+
+        // warn at 60s and 15s remaining (only those that fit inside the window)
+        for (remaining in listOf(60L, 15L)) {
+            if (linger > remaining) {
+                scheduler.schedule(
+                    { announce(server, "§7This match server closes in §e${remaining}s§7.") },
+                    linger - remaining,
+                    TimeUnit.SECONDS,
+                )
+            }
+        }
+
+        scheduleShutdown(server, delaySeconds = linger)
     }
 
     private fun scheduleShutdown(server: MinecraftServer, delaySeconds: Long) {
