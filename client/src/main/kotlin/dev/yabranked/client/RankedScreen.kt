@@ -199,8 +199,9 @@ class RankedScreen(
         super.extractRenderState(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
-        g.centeredText(font, "§lYAB RANKED", centerX, 18, Ui.ACCENT)
-        g.centeredText(font, "Lockout 1v1", centerX, 30, Ui.TEXT_FAINT)
+        Ui.header(g, centerX - 110, 10, 220, 30)
+        g.centeredText(font, "§lYAB RANKED", centerX, 16, Ui.ACCENT)
+        g.centeredText(font, "Lockout 1v1", centerX, 28, Ui.TEXT_FAINT)
 
         val profile = RankedState.profile
         if (profile == null) {
@@ -235,6 +236,7 @@ class RankedScreen(
         val padRight = right - 10
 
         // avatar, then name + season
+        Ui.slot(g, padLeft - 2, CARD_TOP + 6, 28)
         PlayerHeads.draw(g, padLeft, CARD_TOP + 8, 24, profile.uuid, profile.name, tierColor)
         g.text(font, profile.name, padLeft + 30, CARD_TOP + 8, Ui.WHITE)
         Ui.textRight(g, font, "Season ${profile.season}", padRight, CARD_TOP + 8, Ui.TEXT_FAINT)

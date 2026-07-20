@@ -42,7 +42,8 @@ class LeaderboardScreen(
         super.extractRenderState(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
-        g.centeredText(font, "§lLEADERBOARD", centerX, 18, Ui.ACCENT)
+        Ui.header(g, centerX - 110, 10, 220, 24)
+        g.centeredText(font, "§lLEADERBOARD", centerX, 17, Ui.ACCENT)
 
         val left = centerX - WIDTH / 2
         val list = entries
@@ -69,8 +70,9 @@ class LeaderboardScreen(
         val tierColor = Ui.tierColor(profile.tier)
 
         // the viewer's own row is highlighted so it is findable at a glance
-        g.fill(left, y, left + WIDTH, y + ROW_HEIGHT - 2, if (isSelf) 0x40FFC93C else 0x40000000)
-        Ui.accentBar(g, left, y, ROW_HEIGHT - 2, tierColor)
+        Ui.row(g, left, y, WIDTH, ROW_HEIGHT - 1)
+        if (isSelf) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, 0x33FFC93C)
+        Ui.accentBar(g, left, y, ROW_HEIGHT - 1, tierColor)
 
         val textY = y + 4
 

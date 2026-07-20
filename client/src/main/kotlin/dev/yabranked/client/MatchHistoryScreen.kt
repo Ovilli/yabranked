@@ -49,7 +49,8 @@ class MatchHistoryScreen(
         super.extractRenderState(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
-        g.centeredText(font, "§lMATCH HISTORY", centerX, 18, Ui.ACCENT)
+        Ui.header(g, centerX - 110, 10, 220, 24)
+        g.centeredText(font, "§lMATCH HISTORY", centerX, 17, Ui.ACCENT)
 
         val list = entries
         if (list == null || error != null) {
@@ -73,8 +74,8 @@ class MatchHistoryScreen(
     private fun drawRow(g: GuiGraphicsExtractor, left: Int, y: Int, entry: WireHistoryEntry) {
         val color = resultColor(entry.result)
 
-        g.fill(left, y, left + WIDTH, y + ROW_HEIGHT - 2, 0x40000000)
-        Ui.accentBar(g, left, y, ROW_HEIGHT - 2, color)
+        Ui.row(g, left, y, WIDTH, ROW_HEIGHT - 1)
+        Ui.accentBar(g, left, y, ROW_HEIGHT - 1, color)
 
         val textY = y + 4
         val label = when (entry.result) {

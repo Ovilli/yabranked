@@ -36,6 +36,7 @@ class RankedHud : HudElement {
 
         g.text(font, LABEL, x + 8, y + 6, Ui.ACCENT)
         Ui.textRight(g, font, elapsed, x + width - 8, y + 6, Ui.TEXT_DIM)
+        Ui.slot(g, x + 6, y + 17, 20)
         PlayerHeads.draw(g, x + 8, y + 19, 16, match.opponent.uuid, match.opponent.name, Ui.tierColor(match.opponentTier))
         g.text(font, opponent, x + 28, y + 19, Ui.WHITE)
         g.text(font, rating, x + 28, y + 30, Ui.tierColor(match.opponentTier))

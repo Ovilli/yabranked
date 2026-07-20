@@ -4,7 +4,10 @@
   "version": "${version}",
   "name": "YAB Ranked Agent",
   "description": "Match-server orchestration agent for YAB Ranked. Configures and monitors a single ranked bingo match, then reports the result to the ranked backend.",
-  "authors": ["Ovilli"],
+  "icon": "assets/yabranked-agent/icon.png",
+  "authors": [
+    "Ovilli"
+  ],
   "license": "LGPL-3.0-only",
   "environment": "server",
   "entrypoints": {

@@ -101,7 +101,7 @@ class MatchFoundScreen(
             isSelf = false,
         )
 
-        Ui.vsEmblem(g, centerX, top + CARD_HEIGHT / 2 - 8)
+        Ui.vsEmblem(g, centerX, top + CARD_HEIGHT / 2 - 10)
 
         // rating gap tells you what kind of match to expect
         if (self != null && match.opponentRating > 0) {
@@ -146,6 +146,7 @@ class MatchFoundScreen(
         Ui.accentBar(g, x, y, CARD_HEIGHT, tierColor)
 
         g.centeredText(font, if (isSelf) "§7YOU" else "§7OPPONENT", centerX, y + 6, Ui.TEXT_FAINT)
+        Ui.slot(g, centerX - HEAD / 2 - 3, y + 14, HEAD + 6)
         PlayerHeads.draw(g, centerX - HEAD / 2, y + 17, HEAD, uuid, name, tierColor)
         g.centeredText(font, name, centerX, y + 17 + HEAD + 5, if (isSelf) Ui.ACCENT else Ui.WHITE)
         Ui.rankBadge(g, centerX - 8, y + 17 + HEAD + 14, tier)

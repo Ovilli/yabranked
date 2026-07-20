@@ -47,9 +47,15 @@ object Ui {
                 tier.substringBefore(' ').lowercase()
             else -> "unranked"
         }
+        // The short blit overload reuses the destination size as the source
+        // size, which samples past the edge of a 16x16 sprite whenever it is
+        // scaled up — always pass the source region explicitly.
         g.blit(
             RenderPipelines.GUI_TEXTURED, texture("rank/$sprite"),
-            x, y, 0f, 0f, size, size, 16, 16,
+            x, y, 0f, 0f,
+            size, size,
+            16, 16,
+            16, 16,
         )
 
         val division = when {
@@ -74,15 +80,71 @@ object Ui {
         )
     }
 
-    /** The VS emblem used on the match-found screen. */
-    fun vsEmblem(g: GuiGraphicsExtractor, centerX: Int, y: Int, scale: Int = 1) {
-        val w = 24 * scale
-        val h = 16 * scale
+    /**
+     * Crossed-swords emblem for the match-found screen. Deliberately a symbol
+     * rather than baked "VS" lettering: text belongs in the game font, which
+     * renders letterforms correctly and can be translated.
+     */
+    fun vsEmblem(g: GuiGraphicsExtractor, centerX: Int, y: Int, size: Int = 20) {
         g.blit(
             RenderPipelines.GUI_TEXTURED, texture("vs"),
-            centerX - w / 2, y, 0f, 0f, w, h, 24, 16,
+            centerX - size / 2, y, 0f, 0f,
+            size, size,
+            20, 20,
+            20, 20,
         )
     }
+
+    /**
+     * Draws [texture] as a nine-slice so panels keep crisp corners at any
+     * size. [corner] must be small enough that two corners fit the target.
+     */
+    private fun nineSlice(
+        g: GuiGraphicsExtractor,
+        sprite: Identifier,
+        x: Int, y: Int, width: Int, height: Int,
+        source: Int, corner: Int,
+    ) {
+        val c = minOf(corner, width / 2, height / 2)
+        if (c <= 0) return
+        val midW = width - c * 2
+        val midH = height - c * 2
+        val srcMid = source - corner * 2
+        val far = (source - corner).toFloat()
+
+        fun piece(dx: Int, dy: Int, dw: Int, dh: Int, u: Float, v: Float, sw: Int, sh: Int) {
+            if (dw <= 0 || dh <= 0) return
+            g.blit(
+                RenderPipelines.GUI_TEXTURED, sprite,
+                x + dx, y + dy, u, v,
+                dw, dh,
+                sw, sh,
+                source, source,
+            )
+        }
+
+        piece(0, 0, c, c, 0f, 0f, corner, corner)
+        piece(width - c, 0, c, c, far, 0f, corner, corner)
+        piece(0, height - c, c, c, 0f, far, corner, corner)
+        piece(width - c, height - c, c, c, far, far, corner, corner)
+        piece(c, 0, midW, c, corner.toFloat(), 0f, srcMid, corner)
+        piece(c, height - c, midW, c, corner.toFloat(), far, srcMid, corner)
+        piece(0, c, c, midH, 0f, corner.toFloat(), corner, srcMid)
+        piece(width - c, c, c, midH, far, corner.toFloat(), corner, srcMid)
+        piece(c, c, midW, midH, corner.toFloat(), corner.toFloat(), srcMid, srcMid)
+    }
+
+    /** Recessed socket that crests and player heads sit inside. */
+    fun slot(g: GuiGraphicsExtractor, x: Int, y: Int, size: Int) =
+        nineSlice(g, texture("slot"), x, y, size, size, source = 24, corner = 6)
+
+    /** List row background, flatter than [panel] so stacked rows stay calm. */
+    fun row(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int) =
+        nineSlice(g, texture("row"), x, y, width, height, source = 24, corner = 4)
+
+    /** Gold-edged plate used behind screen titles. */
+    fun header(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int) =
+        nineSlice(g, texture("header"), x, y, width, height, source = 24, corner = 8)
 
     private fun darken(color: Int, factor: Float): Int {
         val a = (color ushr 24) and 0xFF
@@ -92,18 +154,23 @@ object Ui {
         return (a shl 24) or (r.toInt() shl 16) or (gg.toInt() shl 8) or b.toInt()
     }
 
-    fun panel(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int) {
-        g.fill(x, y, x + width, y + height, PANEL_BG)
-        g.outline(x, y, width, height, PANEL_BORDER)
-    }
+    fun panel(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int) =
+        nineSlice(g, texture("panel"), x, y, width, height, source = 24, corner = 8)
 
     /** A thin accent stripe, used to colour a panel by tier or result. */
     fun accentBar(g: GuiGraphicsExtractor, x: Int, y: Int, height: Int, color: Int) {
         g.fill(x, y, x + 2, y + height, color)
     }
 
+    /** Ornamental divider that fades out at both ends. */
     fun divider(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int) {
-        g.fill(x, y, x + width, y + 1, PANEL_BORDER)
+        g.blit(
+            RenderPipelines.GUI_TEXTURED, texture("divider"),
+            x, y, 0f, 0f,
+            width, 3,
+            32, 3,
+            32, 3,
+        )
     }
 
     /**

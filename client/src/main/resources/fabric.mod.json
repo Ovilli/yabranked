@@ -4,7 +4,10 @@
   "version": "${version}",
   "name": "YAB Ranked",
   "description": "Competitive ranked queue for Yet Another Bingo: skill-based 1v1 lockout matchmaking, ratings, and leaderboards.",
-  "authors": ["Ovilli"],
+  "icon": "assets/yabranked-client/icon.png",
+  "authors": [
+    "Ovilli"
+  ],
   "license": "LGPL-3.0-only",
   "environment": "client",
   "entrypoints": {
