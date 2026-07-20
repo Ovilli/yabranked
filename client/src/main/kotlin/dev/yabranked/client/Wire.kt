@@ -47,6 +47,15 @@ data class WireReportRequest(
 )
 
 @Serializable
+data class WireVersusRecord(
+    val wins: Int,
+    val losses: Int,
+    val draws: Int,
+) {
+    val played: Int get() = wins + losses + draws
+}
+
+@Serializable
 data class WireSessionRequest(
     val username: String,
     val serverId: String,
@@ -87,6 +96,8 @@ sealed interface WireQueueServerMessage {
         val team: String,
         val opponent: WirePlayerRef,
         val serverAddress: String,
+        val opponentRating: Int = 0,
+        val opponentTier: String = "Unranked",
     ) : WireQueueServerMessage
 
     @Serializable

@@ -19,7 +19,7 @@ prioritizeChunkUpdates:1
 fullscreen:true
 exclusiveFullscreen:false
 gamma:0.5
-guiScale:0
+guiScale:2
 maxAnisotropyBit:1
 textureFiltering:1
 maxFps:120
@@ -170,6 +170,7 @@ key_key.debug.profilingChart:key.keyboard.1
 key_key.debug.fpsCharts:key.keyboard.2
 key_key.debug.networkCharts:key.keyboard.3
 key_key.debug.lightmapTexture:key.keyboard.4
+key_key.yabranked.open:key.keyboard.r
 key_bingo.keybind.open_card:key.keyboard.y
 key_bingo.keybind.toggle_hud:key.keyboard.unknown
 soundCategory_master:1.0

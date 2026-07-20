@@ -8,7 +8,7 @@ entityDistanceScaling:1.0
 entityShadows:true
 forceUnicodeFont:false
 japaneseGlyphVariants:false
-fov:0.0
+fov:1.0
 fovEffectScale:1.0
 darknessEffectScale:1.0
 glintSpeed:0.5
@@ -16,10 +16,10 @@ glintStrength:0.75
 preferredGraphicsBackend:"default"
 graphicsPreset:"fancy"
 prioritizeChunkUpdates:1
-fullscreen:false
+fullscreen:true
 exclusiveFullscreen:false
 gamma:0.5
-guiScale:0
+guiScale:2
 maxAnisotropyBit:1
 textureFiltering:1
 maxFps:120
@@ -172,6 +172,7 @@ key_key.debug.networkCharts:key.keyboard.3
 key_key.debug.lightmapTexture:key.keyboard.4
 key_bingo.keybind.open_card:key.keyboard.y
 key_bingo.keybind.toggle_hud:key.keyboard.unknown
+key_key.yabranked.open:key.keyboard.r
 soundCategory_master:1.0
 soundCategory_music:1.0
 soundCategory_record:1.0

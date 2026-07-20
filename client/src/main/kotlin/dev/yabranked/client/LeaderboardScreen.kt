@@ -1,29 +1,28 @@
 package dev.yabranked.client
 
+import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
-private const val WHITE = -1
-
 class LeaderboardScreen(
-    private val parent: Screen,
-) : Screen(Component.literal("Ranked Leaderboard")) {
+    private val parent: Screen?,
+) : Screen(Component.literal("Leaderboard")) {
 
     private var entries: List<WireProfile>? = null
     private var error: String? = null
 
     override fun init() {
         addRenderableWidget(
-            Button.builder(Component.literal("Done")) { onClose() }
+            Button.builder(Component.literal("Back")) { onClose() }
                 .bounds(width / 2 - 100, height - 28, 200, 20)
                 .build()
         )
 
         val backend = RankedState.backend
         if (backend == null) {
-            error = "Not logged in"
+            error = "Not signed in"
             return
         }
         if (entries == null) {
@@ -32,39 +31,69 @@ class LeaderboardScreen(
                 val fetched = backend.fetchLeaderboard(limit = 15)
                 minecraft.execute {
                     entries = fetched
-                    if (fetched.isEmpty()) error = "No rated players yet"
+                    if (fetched.isEmpty()) error = "No rated players yet this season"
                 }
             }
         }
     }
 
-    override fun extractRenderState(extractor: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(extractor, mouseX, mouseY, partialTick)
+    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.extractRenderState(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
-        extractor.centeredText(font, title, centerX, 16, WHITE)
+        g.centeredText(font, "§lLEADERBOARD", centerX, 18, Ui.ACCENT)
 
+        val left = centerX - WIDTH / 2
         val list = entries
-        when {
-            error != null ->
-                extractor.centeredText(font, "§7$error", centerX, 40, WHITE)
-            list == null ->
-                extractor.centeredText(font, "§7Loading...", centerX, 40, WHITE)
-            else -> {
-                val self = RankedState.profile?.uuid
-                list.forEachIndexed { index, profile ->
-                    val y = 36 + index * 12
-                    if (y > height - 40) return@forEachIndexed
-                    val highlight = if (profile.uuid == self) "§e" else "§f"
-                    val line = "$highlight#${index + 1}  ${profile.name} — ${profile.tier} · ${profile.rating}" +
-                        "  §7(${profile.wins}W ${profile.losses}L)"
-                    extractor.centeredText(font, line, centerX, y, WHITE)
-                }
-            }
+
+        if (list == null || error != null) {
+            g.centeredText(font, error ?: "Loading…", centerX, 60, Ui.TEXT_DIM)
+            return
         }
+
+        // column headers
+        g.text(font, "PLAYER", left + 34, TOP - 12, Ui.TEXT_FAINT)
+        Ui.textRight(g, font, "W/L", left + WIDTH - 62, TOP - 12, Ui.TEXT_FAINT)
+        Ui.textRight(g, font, "MMR", left + WIDTH - 10, TOP - 12, Ui.TEXT_FAINT)
+
+        val self = RankedState.profile?.uuid
+        list.forEachIndexed { index, profile ->
+            val y = TOP + index * ROW_HEIGHT
+            if (y + ROW_HEIGHT > height - 40) return@forEachIndexed
+            drawRow(g, left, y, index + 1, profile, isSelf = profile.uuid == self)
+        }
+    }
+
+    private fun drawRow(g: GuiGraphicsExtractor, left: Int, y: Int, position: Int, profile: WireProfile, isSelf: Boolean) {
+        val tierColor = Ui.tierColor(profile.tier)
+
+        // the viewer's own row is highlighted so it is findable at a glance
+        g.fill(left, y, left + WIDTH, y + ROW_HEIGHT - 2, if (isSelf) 0x40FFC93C else 0x40000000)
+        Ui.accentBar(g, left, y, ROW_HEIGHT - 2, tierColor)
+
+        val textY = y + 4
+
+        // podium positions get the accent colour
+        val positionColor = if (position <= 3) Ui.ACCENT else Ui.TEXT_DIM
+        g.text(font, "#$position", left + 8, textY, positionColor)
+
+        g.text(font, profile.name, left + 34, textY, if (isSelf) Ui.ACCENT else Ui.WHITE)
+        Ui.rankBadge(g, left + 124, y - 1, profile.tier)
+        g.text(font, profile.tier, left + 142, textY, tierColor)
+
+        Ui.textRight(g, font, "§a${profile.wins}§7/§c${profile.losses}", left + WIDTH - 62, textY, Ui.TEXT_DIM)
+        Ui.textRight(g, font, "${profile.rating}", left + WIDTH - 10, textY, Ui.WHITE)
     }
 
     override fun onClose() {
-        minecraft.setScreenAndShow(parent)
+        // null parent means the screen was opened by keybind mid-game:
+        // fall back to vanilla behaviour, which returns to the game
+        if (parent != null) minecraft.setScreenAndShow(parent) else super.onClose()
+    }
+
+    private companion object {
+        const val WIDTH = 280
+        const val TOP = 46
+        const val ROW_HEIGHT = 14
     }
 }

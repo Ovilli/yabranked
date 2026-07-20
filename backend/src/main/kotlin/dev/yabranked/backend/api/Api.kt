@@ -19,6 +19,7 @@ import dev.yabranked.proto.PlayerRef
 import dev.yabranked.proto.QueueClientMessage
 import dev.yabranked.proto.QueueServerMessage
 import dev.yabranked.proto.ReportRequest
+import dev.yabranked.proto.VersusRecord
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.KotlinxWebsocketSerializationConverter
 import io.ktor.serialization.kotlinx.json.json
@@ -216,6 +217,36 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     )
                 }
             call.respond(top)
+        }
+
+        // Head-to-head record between two players, all seasons.
+        get("/v1/players/{a}/versus/{b}") {
+            val a = runCatching { UUID.fromString(call.parameters["a"]) }.getOrNull()
+            val b = runCatching { UUID.fromString(call.parameters["b"]) }.getOrNull()
+            if (a == null || b == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
+                return@get
+            }
+
+            // scan a generous window of A's history and keep the meetings with B
+            val meetings = deps.matches
+                .historyFor(a, deps.seasons.currentSeason, limit = 500)
+                .filter { it.playerA == b || it.playerB == b }
+                .filter { it.outcome != null && it.outcome != MatchOutcome.VOID }
+
+            var wins = 0
+            var losses = 0
+            var draws = 0
+            for (match in meetings) {
+                val aIsTeamA = match.playerA == a
+                when (match.outcome) {
+                    MatchOutcome.DRAW -> draws++
+                    MatchOutcome.TEAM_A_WIN -> if (aIsTeamA) wins++ else losses++
+                    MatchOutcome.TEAM_B_WIN -> if (aIsTeamA) losses++ else wins++
+                    else -> {}
+                }
+            }
+            call.respond(VersusRecord(wins = wins, losses = losses, draws = draws))
         }
 
         get("/v1/seasons/current") {
@@ -472,12 +503,15 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     val isTeamA = ready.playerA == playerUuid
                     val opponentUuid = if (isTeamA) ready.playerB else ready.playerA
                     val opponent = deps.players.getPlayer(opponentUuid)
+                    val opponentProfile = profileOf(opponentUuid)
                     sendSerialized<QueueServerMessage>(
                         QueueServerMessage.MatchFound(
                             matchId = ready.id.toString(),
                             team = if (isTeamA) MatchTeam.TEAM_A else MatchTeam.TEAM_B,
                             opponent = PlayerRef(opponentUuid.toString(), opponent?.name ?: "?"),
                             serverAddress = ready.serverAddress!!,
+                            opponentRating = opponentProfile?.rating ?: 0,
+                            opponentTier = opponentProfile?.tier ?: "Unranked",
                         )
                     )
                 }

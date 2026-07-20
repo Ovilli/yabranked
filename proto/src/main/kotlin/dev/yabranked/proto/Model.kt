@@ -63,6 +63,16 @@ data class ReportRequest(
     val reason: String,
 )
 
+/** Head-to-head record, from the first player's perspective. */
+@Serializable
+data class VersusRecord(
+    val wins: Int,
+    val losses: Int,
+    val draws: Int,
+) {
+    val played: Int get() = wins + losses + draws
+}
+
 @Serializable
 enum class MatchTeam {
     @SerialName("team_a")
@@ -157,6 +167,9 @@ sealed interface QueueServerMessage {
         val opponent: PlayerRef,
         /** Where to connect once the match server reports ready. */
         val serverAddress: String,
+        /** Opponent's rating and tier, for the match-found reveal. */
+        val opponentRating: Int = 0,
+        val opponentTier: String = "Unranked",
     ) : QueueServerMessage
 
     @Serializable

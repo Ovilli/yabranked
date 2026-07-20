@@ -11,8 +11,14 @@ object RankedState {
     var queue: BackendClient.QueueSocket? = null
     var queueStatus: String? = null
 
+    /** Latest queue tick from the server, rendered as the searching panel. */
+    var queueSnapshot: WireQueueServerMessage.QueueState? = null
+
     /** Set while connected to (or connecting to) a ranked match server. */
     var activeMatch: WireQueueServerMessage.MatchFound? = null
+
+    /** Wall-clock ms when the current match server was joined, for the HUD timer. */
+    var matchStartedAt: Long? = null
 
     /** The most recently completed match, kept for the report button. */
     var lastMatch: WireQueueServerMessage.MatchFound? = null
@@ -30,6 +36,7 @@ object RankedState {
         queue?.leave()
         queue = null
         queueStatus = null
+        queueSnapshot = null
         activeMatch = null
         statusMessage = null
     }

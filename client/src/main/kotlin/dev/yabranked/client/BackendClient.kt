@@ -120,6 +120,22 @@ class BackendClient(
         emptyList()
     }
 
+    /** Head-to-head record of [self] against [opponent]. */
+    fun fetchVersus(self: String, opponent: String): WireVersusRecord? = try {
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("$baseUrl/v1/players/$self/versus/$opponent"))
+            .timeout(Duration.ofSeconds(10))
+            .GET()
+            .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() == 200) {
+            json.decodeFromString(WireVersusRecord.serializer(), response.body())
+        } else null
+    } catch (e: Exception) {
+        log.warn("versus fetch failed", e)
+        null
+    }
+
     /** Report the opponent of [matchId]; returns a user-facing status line. */
     fun submitReport(matchId: String, reason: String): String {
         val token = session?.token ?: return "Not logged in"
