@@ -32,11 +32,12 @@ class YabRankedClient : ClientModInitializer {
             if (screen is TitleScreen) {
                 Screens.getWidgets(screen).add(
                     IconButton(
-                        x = scaledWidth - 28,
+                        x = scaledWidth - 44,
                         y = 4,
-                        size = 24,
+                        // large enough that the RANKED wordmark still resolves
+                        size = 40,
                         sprite = Ui.logo(),
-                        spriteSize = 16,
+                        sourceSize = 64,
                         label = Component.literal("YAB Ranked"),
                     ) {
                         Minecraft.getInstance().setScreenAndShow(RankedScreen(screen))

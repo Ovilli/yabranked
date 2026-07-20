@@ -24,7 +24,8 @@ class IconButton(
     y: Int,
     size: Int,
     private val sprite: Identifier,
-    private val spriteSize: Int,
+    /** Native pixel size of [sprite]; scaled to fit the button. */
+    private val sourceSize: Int,
     private val label: Component,
     private val onPress: () -> Unit,
 ) : AbstractWidget(x, y, size, size, label) {
@@ -46,13 +47,15 @@ class IconButton(
             g.fill(x + 1, y + 1, x + width - 1, y + height - 1, 0x33FFC93C)
         }
 
-        val inset = (width - spriteSize) / 2
+        // scale the sprite to the button rather than assuming it fits natively
+        val pad = 3
+        val drawn = width - pad * 2
         g.blit(
             RenderPipelines.GUI_TEXTURED, sprite,
-            x + inset, y + inset, 0f, 0f,
-            spriteSize, spriteSize,
-            spriteSize, spriteSize,
-            spriteSize, spriteSize,
+            x + pad, y + pad, 0f, 0f,
+            drawn, drawn,
+            sourceSize, sourceSize,
+            sourceSize, sourceSize,
         )
     }
 
