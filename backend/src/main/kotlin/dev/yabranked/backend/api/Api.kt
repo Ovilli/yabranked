@@ -43,7 +43,23 @@ import kotlin.time.Duration.Companion.seconds
 private const val PROVISION_TIMEOUT_NANOS = 180L * 1_000_000_000L
 
 @Serializable
-data class SessionRequest(val username: String, val serverId: String)
+data class SessionRequest(
+    val username: String,
+    val serverId: String,
+    val clientVersion: String? = null,
+)
+
+/** Numeric-dotted version compare; unparseable segments count as 0. */
+internal fun versionAtLeast(version: String, minimum: String): Boolean {
+    val a = version.split('.', '-', '+').map { it.toIntOrNull() ?: 0 }
+    val b = minimum.split('.', '-', '+').map { it.toIntOrNull() ?: 0 }
+    for (i in 0 until maxOf(a.size, b.size)) {
+        val x = a.getOrElse(i) { 0 }
+        val y = b.getOrElse(i) { 0 }
+        if (x != y) return x > y
+    }
+    return true
+}
 
 @Serializable
 data class SessionResponse(val token: String, val profile: PlayerProfile)
@@ -78,6 +94,11 @@ class ApiDependencies(
      * matches without an orchestrator. Only enabled together with fake auth.
      */
     val debugEndpoints: Boolean = false,
+    /**
+     * Minimum ranked-client mod version allowed to authenticate; null
+     * disables the gate (local dev / mock client).
+     */
+    val minClientVersion: String? = null,
 )
 
 @Serializable
@@ -110,6 +131,18 @@ fun Application.rankedApi(deps: ApiDependencies) {
     routing {
         post("/v1/auth/session") {
             val request = call.receive<SessionRequest>()
+
+            val minVersion = deps.minClientVersion
+            if (minVersion != null &&
+                (request.clientVersion == null || !versionAtLeast(request.clientVersion, minVersion))
+            ) {
+                call.respond(
+                    HttpStatusCode.UpgradeRequired,
+                    mapOf("error" to "ranked client $minVersion or newer required"),
+                )
+                return@post
+            }
+
             val verified = deps.verifier.verify(request.username, request.serverId)
             if (verified == null) {
                 call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "session verification failed"))

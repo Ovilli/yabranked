@@ -91,6 +91,7 @@ fun main(args: Array<String>) {
                 matchService = matchService,
                 queueService = queueService,
                 debugEndpoints = fakeAuth,
+                minClientVersion = System.getenv("YABRANKED_MIN_CLIENT_VERSION"),
             )
         )
     }.start(wait = true)

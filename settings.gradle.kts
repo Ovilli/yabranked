@@ -17,3 +17,4 @@ rootProject.name = "yabranked"
 include("proto")
 include("backend")
 include("agent")
+include("client")

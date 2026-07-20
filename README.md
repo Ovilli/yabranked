@@ -26,7 +26,14 @@ Phase 0 architecture document.
   (host networking, ports 25600+), torn down when the match settles or is
   reaped after a ready timeout.
 
-Planned (later phases): `client` (Fabric queue/rank UI).
+- `client` — client-side Fabric mod (MC 26.2). "Ranked" button on the title
+  screen → ranked screen with login (real Mojang `joinServer` handshake),
+  queue toggle with live state, auto-connect on match found, post-match MMR
+  delta, and a leaderboard view. Backend URL defaults to `localhost:8080`;
+  override with `-Dyabranked.url=…` or `YABRANKED_URL`. The backend enforces
+  a minimum client version when `YABRANKED_MIN_CLIENT_VERSION` is set
+  (HTTP 426 → "update required" in the UI).
+  Dev launch: `./gradlew :client:runClient`.
 
 ## Development
 
@@ -58,12 +65,15 @@ Mojang session verification — local development only.
    YABRANKED_HOST_NETWORK=false \
      ./backend/build/install/backend/bin/backend
    ```
-4. Queue two players whose usernames match the two Minecraft clients you will
-   connect with (fake auth uses the vanilla offline-UUID formula, so names must
-   match exactly). Easiest today: adapt `MockClient` usernames, or wait for the
-   Phase 3 client mod. When `match_found` arrives it carries `localhost:256xx`.
-5. Connect both clients (multiplayer → direct connect). The agent assigns
-   red/blue, starts lockout, reports the winner, and the container is removed.
+4. Two options to queue:
+   - **Client mod (preferred):** run two game instances with the `client` mod
+     (`./gradlew :client:runClient`), press "Ranked" on the title screen, log
+     in, queue on both. On match found each client auto-connects.
+   - **Mock:** `YABRANKED_MOCK_PLAYER_A/B=<usernames>` with `runMock`, then
+     direct-connect both clients to the `match_found` address (fake auth uses
+     the vanilla offline-UUID formula, so usernames must match exactly).
+5. The agent assigns red/blue, starts lockout (first to 13 items), reports the
+   winner, and the container is removed.
 
 ## API sketch (v1)
 
