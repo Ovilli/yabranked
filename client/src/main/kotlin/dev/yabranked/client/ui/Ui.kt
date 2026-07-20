@@ -3,11 +3,12 @@ package dev.yabranked.client.ui
 import dev.yabranked.client.WireProfile
 import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import net.minecraft.client.renderer.RenderPipelines
+import net.minecraft.resources.Identifier
 
 /**
  * Shared drawing helpers for the ranked screens. Kept deliberately small:
- * panels, dividers, and a few stat widgets drawn with fills and text, so the
- * UI matches Minecraft's own flat-panel look without needing textures.
+ * panels, dividers, stat widgets, and the rank crest / VS sprites.
  */
 object Ui {
     const val WHITE = -1
@@ -33,43 +34,54 @@ object Ui {
         else -> TEXT_DIM
     }
 
+    private fun texture(path: String): Identifier =
+        Identifier.fromNamespaceAndPath("yabranked-client", "textures/gui/$path.png")
+
     /**
-     * Rank badge: a diamond crest whose fill is the tier colour, with one to
-     * three pips for the division. Drawn from fills rather than a texture so
-     * the mod ships no image assets and scales with any resource pack.
+     * Rank crest sprite for the tier, with division pips beneath it.
+     * Sizes are multiples of 16 so the pixel art stays crisp.
      */
-    fun rankBadge(g: GuiGraphicsExtractor, x: Int, y: Int, tier: String) {
-        val color = tierColor(tier)
-        val dark = darken(color, 0.55f)
-        val name = tier.substringBefore(' ')
-
-        if (name == "Unranked") {
-            // hollow crest with a dash: no tier earned yet
-            g.outline(x + 2, y + 2, 12, 12, TEXT_FAINT)
-            g.fill(x + 6, y + 7, x + 10, y + 9, TEXT_FAINT)
-            return
+    fun rankBadge(g: GuiGraphicsExtractor, x: Int, y: Int, tier: String, size: Int = 16) {
+        val sprite = when (tier.substringBefore(' ').lowercase()) {
+            "coal", "iron", "gold", "emerald", "diamond", "netherite" ->
+                tier.substringBefore(' ').lowercase()
+            else -> "unranked"
         }
+        g.blit(
+            RenderPipelines.GUI_TEXTURED, texture("rank/$sprite"),
+            x, y, 0f, 0f, size, size, 16, 16,
+        )
 
-        // diamond built from stacked rows, widest in the middle
-        val rows = listOf(3 to 2, 2 to 4, 1 to 6, 0 to 8, 0 to 8, 1 to 6, 2 to 4, 3 to 2)
-        rows.forEachIndexed { index, (inset, width) ->
-            val rowY = y + 3 + index
-            val rowX = x + 4 + inset
-            val shade = if (index < rows.size / 2) color else dark
-            g.fill(rowX, rowY, rowX + width, rowY + 1, shade)
-        }
-
-        // division pips along the bottom (Netherite has no divisions)
         val division = when {
             tier.endsWith(" III") -> 3
             tier.endsWith(" II") -> 2
             tier.endsWith(" I") -> 1
             else -> 0
         }
-        repeat(division) { pip ->
-            val pipX = x + 3 + pip * 4
-            g.fill(pipX, y + 13, pipX + 2, y + 15, color)
-        }
+        if (division == 0) return
+
+        // pips are white in the sprite sheet and tinted to the tier colour
+        val pipWidth = size / 2
+        val pipHeight = size / 8
+        g.blit(
+            RenderPipelines.GUI_TEXTURED, texture("rank/pips"),
+            x + (size - pipWidth) / 2, y + size,
+            0f, 0f,
+            pipWidth * division / 3, pipHeight,
+            16 * division / 3, 4,
+            16, 4,
+            tierColor(tier),
+        )
+    }
+
+    /** The VS emblem used on the match-found screen. */
+    fun vsEmblem(g: GuiGraphicsExtractor, centerX: Int, y: Int, scale: Int = 1) {
+        val w = 24 * scale
+        val h = 16 * scale
+        g.blit(
+            RenderPipelines.GUI_TEXTURED, texture("vs"),
+            centerX - w / 2, y, 0f, 0f, w, h, 24, 16,
+        )
     }
 
     private fun darken(color: Int, factor: Float): Int {
