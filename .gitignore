@@ -1,0 +1,8 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+.kotlin/
+# staged by docker/fetch-mods.sh
+docker/mods/
