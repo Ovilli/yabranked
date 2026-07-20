@@ -1,5 +1,6 @@
 package dev.yabranked.client
 
+import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -22,6 +23,22 @@ class RankedScreen(
     override fun init() {
         val centerX = width / 2
         val cardBottom = CARD_TOP + CARD_HEIGHT
+
+        // while a match is live the menu's job is the match, not the queue
+        val liveMatch = RankedState.activeMatch
+        if (liveMatch != null) {
+            addRenderableWidget(
+                Button.builder(Component.literal("§cForfeit match")) {
+                    minecraft.setScreenAndShow(ForfeitConfirmScreen(this, liveMatch.opponent.name))
+                }.bounds(centerX - 100, cardBottom + 16, 200, 20).build()
+            )
+            addRenderableWidget(
+                Button.builder(Component.literal("Back")) { onClose() }
+                    .bounds(centerX - 100, height - 28, 200, 20)
+                    .build()
+            )
+            return
+        }
 
         if (!RankedState.isAuthenticated) {
             addRenderableWidget(
@@ -217,13 +234,14 @@ class RankedScreen(
         val padLeft = left + 10
         val padRight = right - 10
 
-        // name + season
-        g.text(font, profile.name, padLeft, CARD_TOP + 8, Ui.WHITE)
+        // avatar, then name + season
+        PlayerHeads.draw(g, padLeft, CARD_TOP + 8, 24, profile.uuid, profile.name, tierColor)
+        g.text(font, profile.name, padLeft + 30, CARD_TOP + 8, Ui.WHITE)
         Ui.textRight(g, font, "Season ${profile.season}", padRight, CARD_TOP + 8, Ui.TEXT_FAINT)
 
         // tier badge + rating, the headline pair
-        Ui.rankBadge(g, padLeft, CARD_TOP + 19, profile.tier)
-        g.text(font, profile.tier, padLeft + 22, CARD_TOP + 22, tierColor)
+        Ui.rankBadge(g, padLeft + 30, CARD_TOP + 19, profile.tier)
+        g.text(font, profile.tier, padLeft + 52, CARD_TOP + 22, tierColor)
         val ratingText = "${profile.rating}"
         Ui.textRight(g, font, ratingText, padRight, CARD_TOP + 22, Ui.WHITE)
         Ui.textRight(g, font, "MMR", padRight - font.width(ratingText) - 4, CARD_TOP + 22, Ui.TEXT_FAINT)
@@ -234,7 +252,7 @@ class RankedScreen(
         } else {
             profile.rank?.let { "§7Rank §f#$it" } ?: "§7Unranked this season"
         }
-        g.text(font, subtitle, padLeft, CARD_TOP + 36, Ui.TEXT_DIM)
+        g.text(font, subtitle, padLeft + 30, CARD_TOP + 36, Ui.TEXT_DIM)
 
         Ui.divider(g, padLeft, CARD_TOP + 50, CARD_WIDTH - 20)
 

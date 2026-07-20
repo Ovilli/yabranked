@@ -92,6 +92,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
     private fun onServerStarted(server: MinecraftServer) {
         this.server = server
+        registerForfeitCommand(server)
         scheduler.execute { configureWithRetry(server, attempt = 1) }
     }
 
@@ -246,6 +247,44 @@ class YabRankedAgent : DedicatedServerModInitializer {
                 scheduler.schedule({ startGame(server, attempt + 1) }, 2, TimeUnit.SECONDS)
             }
         }
+    }
+
+    /**
+     * `/forfeit` lets a player concede without disconnecting — otherwise the
+     * only way out is to quit, which leaves the winner waiting out the
+     * abandon timer before the match resolves.
+     */
+    private fun registerForfeitCommand(server: MinecraftServer) {
+        server.commands.dispatcher.register(
+            com.mojang.brigadier.builder.LiteralArgumentBuilder
+                .literal<net.minecraft.commands.CommandSourceStack>("forfeit")
+                .executes { context ->
+                    val player = context.source.player
+                    val expected = player?.let { expectedPlayer(it.uuid) }
+                    when {
+                        expected == null -> {
+                            context.source.sendFailure(Component.literal("You are not a player in this match."))
+                            0
+                        }
+                        phase.get() != Phase.PLAYING -> {
+                            context.source.sendFailure(Component.literal("There is no match in progress."))
+                            0
+                        }
+                        else -> {
+                            val opponent =
+                                if (expected.uuid == config.playerA.uuid) config.playerB else config.playerA
+                            log.warn("[yabranked] ${expected.name} forfeited; ${opponent.name} wins")
+                            forcedOutcome.set(
+                                if (expected.uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN
+                                else WireOutcome.TEAM_A_WIN
+                            )
+                            announce(server, "§c${expected.name} forfeited. §6${opponent.name} wins!")
+                            command(server, "bingo end")
+                            1
+                        }
+                    }
+                }
+        )
     }
 
     private fun announce(server: MinecraftServer, text: String) {

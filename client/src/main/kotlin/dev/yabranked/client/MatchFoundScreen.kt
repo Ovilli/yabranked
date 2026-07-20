@@ -1,5 +1,6 @@
 package dev.yabranked.client
 
+import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -92,11 +93,15 @@ class MatchFoundScreen(
         val rightX = centerX + gap / 2
 
         if (self != null) {
-            playerCard(g, leftX, top, cardWidth, self.name, self.tier, self.rating, isSelf = true)
+            playerCard(g, leftX, top, cardWidth, self.uuid, self.name, self.tier, self.rating, isSelf = true)
         }
-        playerCard(g, rightX, top, cardWidth, match.opponent.name, match.opponentTier, match.opponentRating, isSelf = false)
+        playerCard(
+            g, rightX, top, cardWidth,
+            match.opponent.uuid, match.opponent.name, match.opponentTier, match.opponentRating,
+            isSelf = false,
+        )
 
-        g.centeredText(font, "§lVS", centerX, top + 30, Ui.WHITE)
+        g.centeredText(font, "§lVS", centerX, top + CARD_HEIGHT / 2 - 4, Ui.WHITE)
 
         // rating gap tells you what kind of match to expect
         if (self != null && match.opponentRating > 0) {
@@ -129,20 +134,23 @@ class MatchFoundScreen(
         x: Int,
         y: Int,
         cardWidth: Int,
+        uuid: String,
         name: String,
         tier: String,
         rating: Int,
         isSelf: Boolean,
     ) {
         val tierColor = Ui.tierColor(tier)
+        val centerX = x + cardWidth / 2
         Ui.panel(g, x, y, cardWidth, CARD_HEIGHT)
         Ui.accentBar(g, x, y, CARD_HEIGHT, tierColor)
 
-        g.centeredText(font, if (isSelf) "§7YOU" else "§7OPPONENT", x + cardWidth / 2, y + 6, Ui.TEXT_FAINT)
-        g.centeredText(font, name, x + cardWidth / 2, y + 18, if (isSelf) Ui.ACCENT else Ui.WHITE)
-        Ui.rankBadge(g, x + cardWidth / 2 - 8, y + 28, tier)
-        g.centeredText(font, tier, x + cardWidth / 2, y + 46, tierColor)
-        g.centeredText(font, "$rating MMR", x + cardWidth / 2, y + 58, Ui.TEXT_DIM)
+        g.centeredText(font, if (isSelf) "§7YOU" else "§7OPPONENT", centerX, y + 6, Ui.TEXT_FAINT)
+        PlayerHeads.draw(g, centerX - HEAD / 2, y + 17, HEAD, uuid, name, tierColor)
+        g.centeredText(font, name, centerX, y + 17 + HEAD + 5, if (isSelf) Ui.ACCENT else Ui.WHITE)
+        Ui.rankBadge(g, centerX - 8, y + 17 + HEAD + 16, tier)
+        g.centeredText(font, tier, centerX, y + 17 + HEAD + 34, tierColor)
+        g.centeredText(font, "$rating MMR", centerX, y + 17 + HEAD + 46, Ui.TEXT_DIM)
     }
 
     /** Escape should not strand the player outside a match that is already live. */
@@ -154,6 +162,7 @@ class MatchFoundScreen(
 
     private companion object {
         const val COUNTDOWN_TICKS = 5 * 20
-        const val CARD_HEIGHT = 74
+        const val CARD_HEIGHT = 108
+        const val HEAD = 32
     }
 }

@@ -1,5 +1,6 @@
 package dev.yabranked.client
 
+import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
@@ -77,7 +78,8 @@ class LeaderboardScreen(
         val positionColor = if (position <= 3) Ui.ACCENT else Ui.TEXT_DIM
         g.text(font, "#$position", left + 8, textY, positionColor)
 
-        g.text(font, profile.name, left + 34, textY, if (isSelf) Ui.ACCENT else Ui.WHITE)
+        PlayerHeads.draw(g, left + 30, y + 2, 8, profile.uuid, profile.name, tierColor)
+        g.text(font, profile.name, left + 44, textY, if (isSelf) Ui.ACCENT else Ui.WHITE)
         Ui.rankBadge(g, left + 124, y - 1, profile.tier)
         g.text(font, profile.tier, left + 142, textY, tierColor)
 
