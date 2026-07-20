@@ -37,6 +37,8 @@ data class PlayerProfile(
     /** Display tier, e.g. "Gold II" or "Unranked" during placements. */
     val tier: String = "Unranked",
     val season: Int = 1,
+    /** 1-based leaderboard position, null until on the ladder. */
+    val rank: Int? = null,
 ) {
     val isPlaced: Boolean get() = placementMatchesRemaining <= 0
 }

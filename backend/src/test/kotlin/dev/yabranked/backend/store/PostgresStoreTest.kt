@@ -1,0 +1,157 @@
+package dev.yabranked.backend.store
+
+import dev.yabranked.proto.MatchFormat
+import dev.yabranked.proto.MatchOutcome
+import dev.yabranked.proto.MatchSettings
+import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.TestInstance
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/**
+ * Round-trip test against a real Postgres in Docker (postgres:16-alpine on
+ * port 55432). Skipped when Docker is not available.
+ */
+@TestInstance(TestInstance.Lifecycle.PER_CLASS)
+class PostgresStoreTest {
+
+    private val containerName = "yabranked-test-pg"
+    private var dockerAvailable = false
+    private lateinit var db: Database
+
+    private fun sh(vararg args: String): Pair<Int, String> {
+        val process = ProcessBuilder(*args).redirectErrorStream(true).start()
+        val out = process.inputStream.bufferedReader().readText()
+        process.waitFor(120, TimeUnit.SECONDS)
+        return process.exitValue() to out
+    }
+
+    @BeforeAll
+    fun startPostgres() {
+        dockerAvailable = sh("docker", "info").first == 0
+        if (!dockerAvailable) return
+
+        sh("docker", "rm", "-f", containerName)
+        val (exit, out) = sh(
+            "docker", "run", "-d", "--name", containerName,
+            "-e", "POSTGRES_PASSWORD=test", "-e", "POSTGRES_DB=yabranked",
+            "-p", "55432:5432", "postgres:16-alpine",
+        )
+        check(exit == 0) { "could not start postgres container: $out" }
+
+        // wait for postgres to accept connections
+        val deadline = System.currentTimeMillis() + 60_000
+        var lastError: Exception? = null
+        while (System.currentTimeMillis() < deadline) {
+            try {
+                db = Database("jdbc:postgresql://localhost:55432/yabranked", "postgres", "test")
+                db.migrate()
+                return
+            } catch (e: Exception) {
+                lastError = e
+                Thread.sleep(1000)
+            }
+        }
+        throw IllegalStateException("postgres did not become ready", lastError)
+    }
+
+    @AfterAll
+    fun stopPostgres() {
+        if (dockerAvailable) sh("docker", "rm", "-f", containerName)
+    }
+
+    private fun now(): Instant = Instant.now().truncatedTo(ChronoUnit.MILLIS)
+
+    @Test
+    fun `player, stats, match, report, and settings round-trip`() {
+        assumeTrue(dockerAvailable, "docker not available")
+
+        val players = PostgresPlayerStore(db)
+        val matches = PostgresMatchStore(db)
+        val reports = PostgresReportStore(db)
+        val settings = PostgresSettingsStore(db)
+
+        // players + ban flag
+        val a = UUID.randomUUID()
+        val b = UUID.randomUUID()
+        players.upsertPlayer(PlayerRecord(a, "Anna", createdAt = now()))
+        players.upsertPlayer(PlayerRecord(b, "Ben", createdAt = now()))
+        assertEquals("Anna", players.getPlayer(a)!!.name)
+        players.upsertPlayer(players.getPlayer(a)!!.copy(bannedAt = now()))
+        assertTrue(players.getPlayer(a)!!.isBanned)
+        players.upsertPlayer(players.getPlayer(a)!!.copy(bannedAt = null))
+
+        // season stats + leaderboard + rank
+        players.upsertStats(SeasonStats(a, season = 1, rating = 1040, matchesPlayed = 1, wins = 1, losses = 0, draws = 0))
+        players.upsertStats(SeasonStats(b, season = 1, rating = 960, matchesPlayed = 1, wins = 0, losses = 1, draws = 0))
+        val top = players.topByRating(season = 1, limit = 10, minMatches = 1)
+        assertEquals(listOf(a, b), top.map { it.uuid })
+        assertEquals(1, players.rankOf(a, season = 1, minMatches = 1))
+        assertEquals(2, players.rankOf(b, season = 1, minMatches = 1))
+        assertNull(players.rankOf(UUID.randomUUID(), season = 1, minMatches = 1))
+        // other season is a fresh ladder
+        assertNull(players.getStats(a, season = 2))
+
+        // match insert/update/history
+        val match = MatchRecord(
+            id = UUID.randomUUID(),
+            season = 1,
+            format = MatchFormat.LOCKOUT_1V1,
+            settings = MatchSettings(MatchFormat.LOCKOUT_1V1, worldSeed = 42L, cardSeed = 7L, timeLimitSeconds = 5400),
+            playerA = a,
+            playerB = b,
+            status = MatchStatus.PENDING,
+            serverToken = "token",
+            outcome = null,
+            ratingABefore = 1000,
+            ratingBBefore = 1000,
+            ratingAAfter = null,
+            ratingBAfter = null,
+            createdAt = now(),
+            completedAt = null,
+        )
+        matches.insert(match)
+        assertEquals(match.settings, matches.get(match.id)!!.settings)
+
+        matches.update(
+            match.copy(
+                status = MatchStatus.COMPLETED,
+                serverAddress = "host:25600",
+                outcome = MatchOutcome.TEAM_A_WIN,
+                ratingAAfter = 1040,
+                ratingBAfter = 960,
+                durationSeconds = 777,
+                teamAScore = 13,
+                teamBScore = 9,
+                completedAt = now(),
+            )
+        )
+        val loaded = matches.get(match.id)!!
+        assertEquals(MatchStatus.COMPLETED, loaded.status)
+        assertEquals(MatchOutcome.TEAM_A_WIN, loaded.outcome)
+        assertEquals(777, loaded.durationSeconds)
+        assertEquals(13, loaded.teamAScore)
+        assertEquals(1, matches.historyFor(a, season = 1, limit = 10).size)
+        assertEquals(0, matches.historyFor(a, season = 2, limit = 10).size)
+
+        // reports
+        val report = ReportRecord(UUID.randomUUID(), match.id, reporter = a, accused = b, reason = "test", createdAt = now())
+        reports.insert(report)
+        assertTrue(reports.existsFor(match.id, a))
+        assertEquals(1, reports.list(10).size)
+
+        // settings
+        settings.put("current_season", "3")
+        settings.put("current_season", "4")
+        assertEquals("4", settings.get("current_season"))
+        assertNull(settings.get("missing"))
+    }
+}

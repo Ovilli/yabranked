@@ -26,6 +26,7 @@ data class WireProfile(
     val draws: Int,
     val tier: String = "Unranked",
     val season: Int = 1,
+    val rank: Int? = null,
 )
 
 @Serializable

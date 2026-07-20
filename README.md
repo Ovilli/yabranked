@@ -46,6 +46,12 @@ Phase 0 architecture document.
 `--fake-auth` (or `YABRANKED_FAKE_AUTH=1`) accepts any username without
 Mojang session verification — local development only.
 
+**Persistence:** set `YABRANKED_DATABASE_URL=jdbc:postgresql://host:5432/yabranked`
+(plus `YABRANKED_DATABASE_USER` / `YABRANKED_DATABASE_PASSWORD`) to run on
+Postgres — the schema is applied automatically at startup and the current
+season persists across restarts. Without it the backend uses in-memory stores
+and loses all state on restart (fine for dev, not for a beta).
+
 ## Local 2-client match test (Phase 2 acceptance)
 
 1. Start Docker (`sudo systemctl start docker`).

@@ -83,6 +83,9 @@ interface PlayerStore {
     fun getStats(uuid: UUID, season: Int): SeasonStats?
     fun upsertStats(stats: SeasonStats)
     fun topByRating(season: Int, limit: Int, minMatches: Int): List<SeasonStats>
+
+    /** 1-based leaderboard rank, or null if not on the ladder yet. */
+    fun rankOf(uuid: UUID, season: Int, minMatches: Int): Int?
 }
 
 interface MatchStore {
@@ -119,6 +122,16 @@ class InMemoryPlayerStore : PlayerStore {
             .filter { it.season == season && it.matchesPlayed >= minMatches }
             .sortedByDescending { it.rating }
             .take(limit)
+
+    override fun rankOf(uuid: UUID, season: Int, minMatches: Int): Int? {
+        val ladder = stats.values
+            .filter { it.season == season && it.matchesPlayed >= minMatches }
+            .sortedByDescending { it.rating }
+        val index = ladder.indexOfFirst { it.uuid == uuid }
+        if (index == -1) return null
+        // standard competition ranking: ties share the better rank
+        return ladder.count { it.rating > ladder[index].rating } + 1
+    }
 }
 
 class InMemoryMatchStore : MatchStore {

@@ -188,9 +188,10 @@ class RankedScreen(
             val placements = if (profile.placementMatchesRemaining > 0) {
                 " §7(${profile.placementMatchesRemaining} placement matches left)"
             } else ""
+            val rank = profile.rank?.let { " §7#$it" } ?: ""
             extractor.centeredText(
                 font,
-                "§e${profile.name}§r — ${profile.tier} · ${profile.rating} MMR$placements §8(Season ${profile.season})",
+                "§e${profile.name}§r — ${profile.tier} · ${profile.rating} MMR$rank$placements §8(Season ${profile.season})",
                 centerX, 40, WHITE,
             )
             extractor.centeredText(

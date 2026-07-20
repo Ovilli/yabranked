@@ -140,6 +140,7 @@ fun Application.rankedApi(deps: ApiDependencies) {
             draws = stats.draws,
             tier = Tier.format(stats.rating, isPlaced = placements <= 0),
             season = stats.season,
+            rank = deps.players.rankOf(uuid, stats.season, minMatches = 1),
         )
     }
 
@@ -199,9 +200,10 @@ fun Application.rankedApi(deps: ApiDependencies) {
             val season = call.request.queryParameters["season"]?.toIntOrNull()
                 ?: deps.seasons.currentSeason
             val top = deps.players.topByRating(season = season, limit = limit, minMatches = 1)
-                .map { stats ->
+                .mapIndexed { index, stats ->
                     val record = deps.players.getPlayer(stats.uuid)
                     PlayerProfile(
+                        rank = index + 1,
                         uuid = stats.uuid.toString(),
                         name = record?.name ?: "?",
                         rating = stats.rating,

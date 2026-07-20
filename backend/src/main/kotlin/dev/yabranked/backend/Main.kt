@@ -10,6 +10,15 @@ import dev.yabranked.backend.orchestrator.MatchOrchestrator
 import dev.yabranked.backend.orchestrator.OrchestratorConfig
 import dev.yabranked.backend.queue.MatchmakingQueue
 import dev.yabranked.backend.season.SeasonService
+import dev.yabranked.backend.store.Database
+import dev.yabranked.backend.store.InMemoryReportStore
+import dev.yabranked.backend.store.MatchStore
+import dev.yabranked.backend.store.PlayerStore
+import dev.yabranked.backend.store.PostgresMatchStore
+import dev.yabranked.backend.store.PostgresPlayerStore
+import dev.yabranked.backend.store.PostgresReportStore
+import dev.yabranked.backend.store.PostgresSettingsStore
+import dev.yabranked.backend.store.ReportStore
 import dev.yabranked.backend.queue.QueueService
 import dev.yabranked.backend.rating.EloRatingSystem
 import dev.yabranked.backend.store.InMemoryMatchStore
@@ -27,10 +36,45 @@ fun main(args: Array<String>) {
     // --fake-auth: accept any username without Mojang verification (local dev / mock client)
     val fakeAuth = "--fake-auth" in args || System.getenv("YABRANKED_FAKE_AUTH") == "1"
 
-    val players = InMemoryPlayerStore()
-    val matches = InMemoryMatchStore()
+    // Postgres when YABRANKED_DATABASE_URL is set; in-memory otherwise (local dev).
+    val databaseUrl = System.getenv("YABRANKED_DATABASE_URL")
+    val envSeason = System.getenv("YABRANKED_SEASON")?.toIntOrNull()
+
+    val players: PlayerStore
+    val matches: MatchStore
+    val reports: ReportStore
+    val seasons: SeasonService
+
+    if (databaseUrl != null) {
+        val db = Database(
+            url = databaseUrl,
+            user = System.getenv("YABRANKED_DATABASE_USER"),
+            password = System.getenv("YABRANKED_DATABASE_PASSWORD"),
+        )
+        db.migrate()
+        log.info("using Postgres at {}", databaseUrl.substringBefore('?'))
+
+        val settings = PostgresSettingsStore(db)
+        players = PostgresPlayerStore(db)
+        matches = PostgresMatchStore(db)
+        reports = PostgresReportStore(db)
+        seasons = SeasonService(
+            initialSeason = envSeason
+                ?: settings.get("current_season")?.toIntOrNull()
+                ?: 1,
+            onChange = { settings.put("current_season", it.toString()) },
+        )
+        // remember an env-forced season too
+        settings.put("current_season", seasons.currentSeason.toString())
+    } else {
+        log.warn("no YABRANKED_DATABASE_URL set — using in-memory stores (state lost on restart)")
+        players = InMemoryPlayerStore()
+        matches = InMemoryMatchStore()
+        reports = InMemoryReportStore()
+        seasons = SeasonService(envSeason ?: 1)
+    }
+
     val rating = EloRatingSystem()
-    val seasons = SeasonService(System.getenv("YABRANKED_SEASON")?.toIntOrNull() ?: 1)
     val matchService = MatchService(players, matches, rating, seasons)
     val queueService = QueueService(MatchmakingQueue(), matchService)
 
@@ -95,6 +139,7 @@ fun main(args: Array<String>) {
                 debugEndpoints = fakeAuth,
                 minClientVersion = System.getenv("YABRANKED_MIN_CLIENT_VERSION"),
                 seasons = seasons,
+                reports = reports,
                 adminToken = System.getenv("YABRANKED_ADMIN_TOKEN"),
             )
         )

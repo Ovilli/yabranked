@@ -1,14 +1,14 @@
 -- YAB Ranked Postgres schema (target for the Postgres store; the service
 -- currently runs on in-memory implementations of the same interfaces).
 
-CREATE TABLE players (
+CREATE TABLE IF NOT EXISTS players (
     uuid            uuid PRIMARY KEY,
     name            text NOT NULL,
     banned_at       timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE season_stats (
+CREATE TABLE IF NOT EXISTS season_stats (
     uuid            uuid NOT NULL REFERENCES players (uuid),
     season          integer NOT NULL,
     rating          integer NOT NULL,
@@ -19,7 +19,7 @@ CREATE TABLE season_stats (
     PRIMARY KEY (uuid, season)
 );
 
-CREATE TABLE matches (
+CREATE TABLE IF NOT EXISTS matches (
     id               uuid PRIMARY KEY,
     season           integer NOT NULL,
     format           text NOT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE matches (
     completed_at     timestamptz
 );
 
-CREATE TABLE reports (
+CREATE TABLE IF NOT EXISTS reports (
     id          uuid PRIMARY KEY,
     match_id    uuid NOT NULL REFERENCES matches (id),
     reporter    uuid NOT NULL REFERENCES players (uuid),
@@ -53,6 +53,12 @@ CREATE TABLE reports (
     UNIQUE (match_id, reporter)
 );
 
-CREATE INDEX matches_player_a_idx ON matches (player_a, season, created_at DESC);
-CREATE INDEX matches_player_b_idx ON matches (player_b, season, created_at DESC);
-CREATE INDEX season_stats_rating_idx ON season_stats (season, rating DESC);
+CREATE INDEX IF NOT EXISTS matches_player_a_idx ON matches (player_a, season, created_at DESC);
+CREATE INDEX IF NOT EXISTS matches_player_b_idx ON matches (player_b, season, created_at DESC);
+CREATE INDEX IF NOT EXISTS season_stats_rating_idx ON season_stats (season, rating DESC);
+
+-- misc persisted settings (e.g. current_season)
+CREATE TABLE IF NOT EXISTS settings (
+    key    text PRIMARY KEY,
+    value  text NOT NULL
+);
