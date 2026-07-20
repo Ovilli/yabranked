@@ -1,6 +1,7 @@
 package dev.yabranked.client
 
 import dev.yabranked.client.ui.PlayerHeads
+import dev.yabranked.client.ui.QueueBadge
 import dev.yabranked.client.ui.Ui
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElement
 import net.minecraft.client.DeltaTracker
@@ -17,8 +18,14 @@ class RankedHud : HudElement {
 
     override fun extractRenderState(g: GuiGraphicsExtractor, tracker: DeltaTracker) {
         val minecraft = Minecraft.getInstance()
-        val match = RankedState.activeMatch ?: return
         val font = minecraft.font
+
+        val match = RankedState.activeMatch
+        if (match == null) {
+            // queued while playing elsewhere: show the search badge instead
+            if (QueueBadge.isVisible()) QueueBadge.draw(g, font, 4, 4)
+            return
+        }
 
         val elapsed = RankedState.matchStartedAt?.let {
             Ui.duration((System.currentTimeMillis() - it) / 1000)

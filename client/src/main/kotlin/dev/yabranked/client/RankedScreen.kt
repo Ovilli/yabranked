@@ -2,13 +2,9 @@ package dev.yabranked.client
 
 import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
-import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
-import net.minecraft.client.gui.screens.ConnectScreen
 import net.minecraft.client.gui.screens.Screen
-import net.minecraft.client.multiplayer.ServerData
-import net.minecraft.client.multiplayer.resolver.ServerAddress
 import net.minecraft.network.chat.Component
 
 class RankedScreen(
@@ -128,69 +124,8 @@ class RankedScreen(
     }
 
     private fun toggleQueue() {
-        val minecraft = this.minecraft
-        val backend = RankedState.backend ?: return
-
-        val existing = RankedState.queue
-        if (existing != null) {
-            existing.leave()
-            RankedState.queue = null
-            RankedState.queueSnapshot = null
-            RankedState.queueStatus = null
-            queueButton?.message = queueLabel()
-            return
-        }
-
-        RankedState.lastRatingChange = null
-        RankedState.queueStatus = "Joining queue…"
-
-        YabRankedClient.workers.execute {
-            val socket = backend.joinQueue(
-                format = "lockout_1v1",
-                onMessage = { message -> minecraft.execute { onQueueMessage(message) } },
-                onClosed = { reason ->
-                    minecraft.execute {
-                        RankedState.queue = null
-                        RankedState.queueSnapshot = null
-                        if (RankedState.activeMatch == null) {
-                            RankedState.queueStatus = reason?.let { "§7Queue closed: $it" }
-                        }
-                        queueButton?.message = queueLabel()
-                    }
-                },
-            )
-            minecraft.execute {
-                RankedState.queue = socket
-                if (socket == null) RankedState.queueStatus = "§cCould not join the queue"
-                queueButton?.message = queueLabel()
-            }
-        }
-    }
-
-    private fun onQueueMessage(message: WireQueueServerMessage) {
-        val minecraft = Minecraft.getInstance()
-        when (message) {
-            is WireQueueServerMessage.QueueState -> {
-                RankedState.queueSnapshot = message
-                RankedState.queueStatus = null
-            }
-
-            is WireQueueServerMessage.QueueError -> {
-                RankedState.queueSnapshot = null
-                RankedState.queueStatus = "§c${message.message}"
-            }
-
-            is WireQueueServerMessage.MatchFound -> {
-                RankedState.activeMatch = message
-                RankedState.queue = null
-                RankedState.queueSnapshot = null
-                RankedState.queueStatus = null
-
-                // reveal the opponent before connecting rather than yanking the
-                // player straight into a loading screen
-                minecraft.setScreenAndShow(MatchFoundScreen(parent, message))
-            }
-        }
+        if (RankedState.isQueued) RankedQueue.leave() else RankedQueue.join()
+        queueButton?.message = queueLabel()
     }
 
     // --- rendering ---

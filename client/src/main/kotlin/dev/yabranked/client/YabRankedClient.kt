@@ -2,6 +2,7 @@ package dev.yabranked.client
 
 import com.mojang.blaze3d.platform.InputConstants
 import dev.yabranked.client.ui.IconButton
+import dev.yabranked.client.ui.QueueBadge
 import dev.yabranked.client.ui.Ui
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
@@ -43,6 +44,18 @@ class YabRankedClient : ClientModInitializer {
                         Minecraft.getInstance().setScreenAndShow(RankedScreen(screen))
                     }
                 )
+            }
+        }
+
+        // Queue badge on every screen: leaving the ranked menu keeps the queue
+        // running, so the player needs to see that from wherever they are.
+        ScreenEvents.AFTER_INIT.register { client, screen, _, _ ->
+            if (screen is RankedScreen || screen is MatchFoundScreen) return@register
+            ScreenEvents.afterExtract(screen).register { drawn, g, _, _, _ ->
+                if (QueueBadge.isVisible()) {
+                    val font = client.font
+                    QueueBadge.draw(g, font, drawn.width - QueueBadge.width(font) - 4, 4)
+                }
             }
         }
 
