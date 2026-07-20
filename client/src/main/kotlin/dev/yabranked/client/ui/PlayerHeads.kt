@@ -61,7 +61,7 @@ object PlayerHeads {
         g.fill(x - 1, y - 1, x + size + 1, y + size + 1, accent)
 
         if (parsed == null) {
-            g.fill(x, y, x + size, y + size, 0xFF2B3140.toInt())
+            g.fill(x, y, x + size, y + size, 0xFF1A1A1A.toInt())
             return
         }
 

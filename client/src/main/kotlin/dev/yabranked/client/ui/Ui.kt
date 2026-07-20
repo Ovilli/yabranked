@@ -12,11 +12,11 @@ import net.minecraft.resources.Identifier
  */
 object Ui {
     const val WHITE = -1
-    const val TEXT_DIM = 0xFF9A9A9A.toInt()
-    const val TEXT_FAINT = 0xFF6E6E6E.toInt()
+    const val TEXT_DIM = 0xFFA0A0A0.toInt()
+    const val TEXT_FAINT = 0xFF707070.toInt()
 
-    const val PANEL_BG = 0xC00E1116.toInt()
-    const val PANEL_BORDER = 0xFF2B3140.toInt()
+    const val PANEL_BG = 0xD0080808.toInt()
+    const val PANEL_BORDER = 0xFF555555.toInt()
 
     const val WIN = 0xFF5BD97A.toInt()
     const val LOSS = 0xFFE05C5C.toInt()
@@ -30,7 +30,7 @@ object Ui {
         "Gold" -> 0xFFFFC93C.toInt()
         "Emerald" -> 0xFF2ECC71.toInt()
         "Diamond" -> 0xFF3FD0D8.toInt()
-        "Netherite" -> 0xFF8E7B9B.toInt()
+        "Netherite" -> 0xFF6B6070.toInt()
         else -> TEXT_DIM
     }
 
@@ -162,7 +162,7 @@ object Ui {
      */
     fun winRateBar(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, wins: Int, losses: Int, draws: Int) {
         val total = wins + losses + draws
-        g.fill(x, y, x + width, y + 3, 0xFF23262E.toInt())
+        g.fill(x, y, x + width, y + 3, 0xFF1C1C1C.toInt())
         if (total == 0) return
 
         var cursor = x

@@ -71,7 +71,7 @@ class LeaderboardScreen(
 
         // the viewer's own row is highlighted so it is findable at a glance
         Ui.row(g, left, y, WIDTH, ROW_HEIGHT - 1)
-        if (isSelf) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, 0x33FFC93C)
+        if (isSelf) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, 0x2BFFC93C)
         Ui.accentBar(g, left, y, ROW_HEIGHT - 1, tierColor)
 
         val textY = y + 4
