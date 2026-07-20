@@ -86,6 +86,9 @@ class MatchOrchestrator(
             "YABRANKED_SERVER_TOKEN" to match.serverToken,
             "YABRANKED_CARD_SEED" to match.settings.cardSeed.toString(),
             "YABRANKED_TIME_LIMIT_MINUTES" to (match.settings.timeLimitSeconds / 60).toString(),
+            "YABRANKED_RULES" to kotlinx.serialization.json.Json.encodeToString(
+                dev.yabranked.proto.MatchRules.serializer(), match.format.rules,
+            ),
             "YABRANKED_PLAYER_A_UUID" to playerA.uuid.toString(),
             "YABRANKED_PLAYER_A_NAME" to playerA.name,
             "YABRANKED_PLAYER_B_UUID" to playerB.uuid.toString(),

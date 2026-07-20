@@ -90,6 +90,34 @@ class YabRankedAgent : DedicatedServerModInitializer {
         }
     }
 
+    /**
+     * Translates the backend's rule spec into YAB commands. Every command is
+     * verified, so a format the server cannot honour fails loudly during
+     * configuration instead of quietly producing the wrong game.
+     */
+    private fun applyRules(server: MinecraftServer): Boolean {
+        val rules = config.rules
+        val commands = buildList {
+            add("bingo mode lockout ${rules.lockout}")
+            add("bingo mode inventory ${rules.inventory}")
+            add("bingo mode hidden_items ${rules.hiddenItems}")
+            add("bingo mode consume_items ${rules.consumeItems}")
+            add("bingo goal ${rules.goalCount} ${rules.goalType}")
+            // lockout can in principle deadlock every line; let YAB end the
+            // game rather than letting a match hang to the time limit
+            add("bingo options stalemate end_game")
+            add("bingo options end_when first_win")
+            add("bingo options pvp ${rules.pvp}")
+            add("bingo timelimit ${rules.timeLimitMinutes}")
+            rules.difficulty?.let { add("bingo difficulty ${it.joinToString(" ")}") }
+            add("bingo card seed ${config.cardSeed}")
+            // the locator bar points straight at the opponent — in a race for
+            // the same items that hands away their whole strategy
+            add("gamerule locator_bar false")
+        }
+        return commands.all { command(server, it) }
+    }
+
     private fun onServerStarted(server: MinecraftServer) {
         this.server = server
         registerForfeitCommand(server)
@@ -126,19 +154,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
             // card seed makes the board deterministic; goal is 13 items —
             // majority of the 25 tiles, always decided in lockout (a lines
             // goal can stalemate, which YAB itself warns about)
-            val ok = command(server, "bingo mode lockout true") &&
-                // classic bingo: first completed line wins. Lockout can in
-                // principle deadlock every line, so leave YAB's stalemate
-                // handling on (end_game) as the safety net rather than
-                // switching to an items goal, which drags matches out.
-                command(server, "bingo goal 1 lines") &&
-                command(server, "bingo options stalemate end_game") &&
-                command(server, "bingo options end_when first_win") &&
-                command(server, "bingo timelimit ${config.timeLimitMinutes}") &&
-                command(server, "bingo card seed ${config.cardSeed}") &&
-                // the locator bar points straight at the opponent — in a race
-                // for the same items that hands away their whole strategy
-                command(server, "gamerule locator_bar false")
+            val ok = applyRules(server)
             configured.complete(ok)
         }
 

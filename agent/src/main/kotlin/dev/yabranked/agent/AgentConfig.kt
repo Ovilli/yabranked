@@ -1,5 +1,6 @@
 package dev.yabranked.agent
 
+import kotlinx.serialization.json.Json
 import java.util.UUID
 
 /**
@@ -13,7 +14,8 @@ data class AgentConfig(
     /** Per-match secret used to authenticate reports to the backend. */
     val serverToken: String,
     val cardSeed: Long,
-    val timeLimitMinutes: Int,
+    /** Rules for this match, described by the backend rather than hardcoded here. */
+    val rules: MatchRules,
     val playerA: ExpectedPlayer,
     val playerB: ExpectedPlayer,
     /** Seconds to wait for both players before voiding the match. */
@@ -26,6 +28,8 @@ data class AgentConfig(
     data class ExpectedPlayer(val uuid: UUID, val name: String)
 
     companion object {
+        private val json = Json { ignoreUnknownKeys = true }
+
         fun fromEnv(env: Map<String, String> = System.getenv()): AgentConfig? {
             val backendUrl = env["YABRANKED_BACKEND_URL"] ?: return null
             val matchId = env["YABRANKED_MATCH_ID"] ?: return null
@@ -41,7 +45,13 @@ data class AgentConfig(
                 matchId = matchId,
                 serverToken = serverToken,
                 cardSeed = cardSeed,
-                timeLimitMinutes = env["YABRANKED_TIME_LIMIT_MINUTES"]?.toIntOrNull() ?: 90,
+                rules = env["YABRANKED_RULES"]
+                    ?.let { runCatching { json.decodeFromString<MatchRules>(it) }.getOrNull() }
+                    ?: MatchRules(
+                        // fall back to the original ranked format if the backend
+                        // sent nothing parseable, rather than refusing to start
+                        timeLimitMinutes = env["YABRANKED_TIME_LIMIT_MINUTES"]?.toIntOrNull() ?: 90,
+                    ),
                 playerA = ExpectedPlayer(playerAUuid, playerAName),
                 playerB = ExpectedPlayer(playerBUuid, playerBName),
                 noShowTimeoutSeconds = env["YABRANKED_NO_SHOW_TIMEOUT_SECONDS"]?.toLongOrNull() ?: 300,

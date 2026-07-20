@@ -132,7 +132,7 @@ class MatchService(
                 format = format,
                 worldSeed = random.nextLong(),
                 cardSeed = random.nextLong(),
-                timeLimitSeconds = DEFAULT_TIME_LIMIT_SECONDS,
+                timeLimitSeconds = format.rules.timeLimitMinutes * 60L,
             ),
             playerA = statsA.uuid,
             playerB = statsB.uuid,
@@ -185,7 +185,8 @@ class MatchService(
             outcome = report.outcome,
         )
 
-        if (report.outcome != MatchOutcome.VOID) {
+        // casual formats record the match but never touch the ladder
+        if (report.outcome != MatchOutcome.VOID && match.format.ranked) {
             players.upsertStats(
                 statsA.copy(
                     rating = update.playerA.rating,

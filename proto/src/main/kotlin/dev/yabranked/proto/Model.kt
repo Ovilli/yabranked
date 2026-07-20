@@ -11,11 +11,78 @@ import kotlinx.serialization.Serializable
  * compatibility with vanilla tooling and YAB's UuidAsString.
  */
 
+/**
+ * The rules a match server should apply, as data rather than code.
+ *
+ * The agent turns this into YAB commands, so adding a format is a matter of
+ * describing it here — no agent changes, no new image.
+ */
 @Serializable
-enum class MatchFormat {
-    /** First ranked format: two teams of one, lockout card, first win ends the game. */
+data class MatchRules(
+    /** Claiming an item denies it to the opponent. */
+    val lockout: Boolean = true,
+    /** Items must remain in the player's inventory to count. */
+    val inventory: Boolean = false,
+    /** Objectives stay hidden until discovered. */
+    val hiddenItems: Boolean = false,
+    /** Claimed items are taken from the player. */
+    val consumeItems: Boolean = false,
+    /** "lines" or "items". */
+    val goalType: String = "lines",
+    val goalCount: Int = 1,
+    val timeLimitMinutes: Int = 90,
+    val pvp: Boolean = true,
+    /** Tier distribution S,A,B,C,D — must total 25. Null keeps the server default. */
+    val difficulty: List<Int>? = null,
+)
+
+@Serializable
+enum class MatchFormat(
+    val displayName: String,
+    /** Rated formats affect MMR; casual ones do not. */
+    val ranked: Boolean,
+    val rules: MatchRules,
+) {
     @SerialName("lockout_1v1")
-    LOCKOUT_1V1,
+    LOCKOUT_1V1(
+        displayName = "Lockout 1v1",
+        ranked = true,
+        rules = MatchRules(lockout = true, goalType = "lines", goalCount = 1),
+    ),
+
+    @SerialName("casual_lockout")
+    CASUAL_LOCKOUT(
+        displayName = "Casual Lockout",
+        ranked = false,
+        rules = MatchRules(lockout = true, goalType = "lines", goalCount = 1),
+    ),
+
+    @SerialName("casual_standard")
+    CASUAL_STANDARD(
+        displayName = "Casual Standard",
+        ranked = false,
+        // no lockout: both players race the same card without denial
+        rules = MatchRules(lockout = false, goalType = "lines", goalCount = 1),
+    ),
+
+    @SerialName("casual_blackout")
+    CASUAL_BLACKOUT(
+        displayName = "Casual Blackout",
+        ranked = false,
+        rules = MatchRules(lockout = true, goalType = "items", goalCount = 25, timeLimitMinutes = 120),
+    ),
+
+    @SerialName("casual_hidden")
+    CASUAL_HIDDEN(
+        displayName = "Casual Hidden Items",
+        ranked = false,
+        rules = MatchRules(lockout = true, hiddenItems = true, goalType = "lines", goalCount = 1),
+    );
+
+    companion object {
+        val rankedFormats get() = entries.filter { it.ranked }
+        val casualFormats get() = entries.filter { !it.ranked }
+    }
 }
 
 @Serializable
