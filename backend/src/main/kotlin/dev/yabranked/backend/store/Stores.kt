@@ -5,16 +5,27 @@ import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchSettings
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
+/** Account identity — season-independent. */
 data class PlayerRecord(
     val uuid: UUID,
     val name: String,
+    val bannedAt: Instant? = null,
+    val createdAt: Instant,
+) {
+    val isBanned: Boolean get() = bannedAt != null
+}
+
+/** Ladder stats for one player in one season. */
+data class SeasonStats(
+    val uuid: UUID,
+    val season: Int,
     val rating: Int,
     val matchesPlayed: Int,
     val wins: Int,
     val losses: Int,
     val draws: Int,
-    val createdAt: Instant,
 )
 
 enum class MatchStatus {
@@ -30,6 +41,7 @@ enum class MatchStatus {
 
 data class MatchRecord(
     val id: UUID,
+    val season: Int,
     val format: MatchFormat,
     val settings: MatchSettings,
     val playerA: UUID,
@@ -44,46 +56,73 @@ data class MatchRecord(
     val ratingBBefore: Int,
     val ratingAAfter: Int?,
     val ratingBAfter: Int?,
+    val durationSeconds: Long? = null,
+    val teamAScore: Int? = null,
+    val teamBScore: Int? = null,
     val createdAt: Instant,
     val completedAt: Instant?,
 )
 
+data class ReportRecord(
+    val id: UUID,
+    val matchId: UUID,
+    val reporter: UUID,
+    val accused: UUID,
+    val reason: String,
+    val createdAt: Instant,
+)
+
 /**
- * Persistence interfaces. Phase 1 ships in-memory implementations;
- * Phase 2+ replaces them with Postgres (schema in backend/src/main/resources/schema.sql)
+ * Persistence interfaces. In-memory implementations below; Postgres versions
+ * replace them later (schema in backend/src/main/resources/schema.sql)
  * without touching callers.
  */
 interface PlayerStore {
-    fun get(uuid: UUID): PlayerRecord?
-    fun upsert(record: PlayerRecord)
-    fun topByRating(limit: Int, minMatches: Int): List<PlayerRecord>
+    fun getPlayer(uuid: UUID): PlayerRecord?
+    fun upsertPlayer(record: PlayerRecord)
+    fun getStats(uuid: UUID, season: Int): SeasonStats?
+    fun upsertStats(stats: SeasonStats)
+    fun topByRating(season: Int, limit: Int, minMatches: Int): List<SeasonStats>
 }
 
 interface MatchStore {
     fun get(id: UUID): MatchRecord?
     fun insert(record: MatchRecord)
     fun update(record: MatchRecord)
-    fun historyFor(player: UUID, limit: Int): List<MatchRecord>
+    fun historyFor(player: UUID, season: Int, limit: Int): List<MatchRecord>
+}
+
+interface ReportStore {
+    fun insert(record: ReportRecord)
+    fun list(limit: Int): List<ReportRecord>
+    fun existsFor(matchId: UUID, reporter: UUID): Boolean
 }
 
 class InMemoryPlayerStore : PlayerStore {
-    private val players = java.util.concurrent.ConcurrentHashMap<UUID, PlayerRecord>()
+    private val players = ConcurrentHashMap<UUID, PlayerRecord>()
+    private val stats = ConcurrentHashMap<Pair<UUID, Int>, SeasonStats>()
 
-    override fun get(uuid: UUID): PlayerRecord? = players[uuid]
+    override fun getPlayer(uuid: UUID): PlayerRecord? = players[uuid]
 
-    override fun upsert(record: PlayerRecord) {
+    override fun upsertPlayer(record: PlayerRecord) {
         players[record.uuid] = record
     }
 
-    override fun topByRating(limit: Int, minMatches: Int): List<PlayerRecord> =
-        players.values
-            .filter { it.matchesPlayed >= minMatches }
+    override fun getStats(uuid: UUID, season: Int): SeasonStats? = stats[uuid to season]
+
+    override fun upsertStats(stats: SeasonStats) {
+        this.stats[stats.uuid to stats.season] = stats
+    }
+
+    override fun topByRating(season: Int, limit: Int, minMatches: Int): List<SeasonStats> =
+        stats.values
+            .filter { it.season == season && it.matchesPlayed >= minMatches }
             .sortedByDescending { it.rating }
             .take(limit)
 }
 
 class InMemoryMatchStore : MatchStore {
-    private val matches = java.util.concurrent.ConcurrentHashMap<UUID, MatchRecord>()
+    private val matches = ConcurrentHashMap<UUID, MatchRecord>()
 
     override fun get(id: UUID): MatchRecord? = matches[id]
 
@@ -96,9 +135,23 @@ class InMemoryMatchStore : MatchStore {
         matches[record.id] = record
     }
 
-    override fun historyFor(player: UUID, limit: Int): List<MatchRecord> =
+    override fun historyFor(player: UUID, season: Int, limit: Int): List<MatchRecord> =
         matches.values
-            .filter { it.playerA == player || it.playerB == player }
+            .filter { it.season == season && (it.playerA == player || it.playerB == player) }
             .sortedByDescending { it.createdAt }
             .take(limit)
+}
+
+class InMemoryReportStore : ReportStore {
+    private val reports = ConcurrentHashMap<UUID, ReportRecord>()
+
+    override fun insert(record: ReportRecord) {
+        reports[record.id] = record
+    }
+
+    override fun list(limit: Int): List<ReportRecord> =
+        reports.values.sortedByDescending { it.createdAt }.take(limit)
+
+    override fun existsFor(matchId: UUID, reporter: UUID): Boolean =
+        reports.values.any { it.matchId == matchId && it.reporter == reporter }
 }

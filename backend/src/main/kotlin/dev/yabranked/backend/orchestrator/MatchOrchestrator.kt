@@ -68,8 +68,8 @@ class MatchOrchestrator(
     private fun provision(scope: CoroutineScope, match: MatchRecord) {
         val port = nextPort()
         val name = "yabranked-${match.id}"
-        val playerA = players.get(match.playerA) ?: error("unknown player ${match.playerA}")
-        val playerB = players.get(match.playerB) ?: error("unknown player ${match.playerB}")
+        val playerA = players.getPlayer(match.playerA) ?: error("unknown player ${match.playerA}")
+        val playerB = players.getPlayer(match.playerB) ?: error("unknown player ${match.playerB}")
 
         val containerPort = if (config.hostNetwork) port else 25565
         val env = buildMap {

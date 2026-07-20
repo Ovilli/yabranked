@@ -3,9 +3,14 @@ package dev.yabranked.backend.api
 import dev.yabranked.backend.auth.SessionVerifier
 import dev.yabranked.backend.match.MatchService
 import dev.yabranked.backend.queue.QueueService
+import dev.yabranked.backend.rating.Tier
+import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.MatchRecord
 import dev.yabranked.backend.store.MatchStatus
 import dev.yabranked.backend.store.PlayerStore
+import dev.yabranked.backend.store.ReportRecord
+import dev.yabranked.backend.store.ReportStore
+import dev.yabranked.proto.MatchHistoryEntry
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchResultReport
 import dev.yabranked.proto.MatchTeam
@@ -13,6 +18,7 @@ import dev.yabranked.proto.PlayerProfile
 import dev.yabranked.proto.PlayerRef
 import dev.yabranked.proto.QueueClientMessage
 import dev.yabranked.proto.QueueServerMessage
+import dev.yabranked.proto.ReportRequest
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.KotlinxWebsocketSerializationConverter
 import io.ktor.serialization.kotlinx.json.json
@@ -21,6 +27,7 @@ import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -99,6 +106,10 @@ class ApiDependencies(
      * disables the gate (local dev / mock client).
      */
     val minClientVersion: String? = null,
+    val seasons: SeasonService = SeasonService(),
+    val reports: ReportStore = dev.yabranked.backend.store.InMemoryReportStore(),
+    /** Shared secret for the admin endpoints; null disables them all. */
+    val adminToken: String? = null,
 )
 
 @Serializable
@@ -116,16 +127,32 @@ fun Application.rankedApi(deps: ApiDependencies) {
     }
 
     fun profileOf(uuid: UUID): PlayerProfile? {
-        val record = deps.players.get(uuid) ?: return null
+        val record = deps.players.getPlayer(uuid) ?: return null
+        val stats = deps.matchService.statsFor(uuid)
+        val placements = deps.matchService.placementMatchesRemaining(stats)
         return PlayerProfile(
             uuid = record.uuid.toString(),
             name = record.name,
-            rating = record.rating,
-            placementMatchesRemaining = deps.matchService.placementMatchesRemaining(record),
-            wins = record.wins,
-            losses = record.losses,
-            draws = record.draws,
+            rating = stats.rating,
+            placementMatchesRemaining = placements,
+            wins = stats.wins,
+            losses = stats.losses,
+            draws = stats.draws,
+            tier = Tier.format(stats.rating, isPlaced = placements <= 0),
+            season = stats.season,
         )
+    }
+
+    /** Player-token auth for endpoints acting on behalf of a player. */
+    fun authedPlayer(call: io.ktor.server.application.ApplicationCall): UUID? =
+        call.request.headers["Authorization"]
+            ?.removePrefix("Bearer ")?.trim()
+            ?.let(deps.tokens::resolve)
+
+    fun isAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
+        val expected = deps.adminToken ?: return false
+        val given = call.request.headers["X-Admin-Token"] ?: return false
+        return java.security.MessageDigest.isEqual(expected.toByteArray(), given.toByteArray())
     }
 
     routing {
@@ -148,7 +175,11 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "session verification failed"))
                 return@post
             }
-            deps.matchService.getOrCreatePlayer(verified.uuid, verified.name)
+            val player = deps.matchService.getOrCreatePlayer(verified.uuid, verified.name)
+            if (player.isBanned) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "account banned from ranked play"))
+                return@post
+            }
             val token = deps.tokens.issue(verified.uuid)
             call.respond(SessionResponse(token, profileOf(verified.uuid)!!))
         }
@@ -165,9 +196,151 @@ fun Application.rankedApi(deps: ApiDependencies) {
 
         get("/v1/leaderboard") {
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
-            val top = deps.players.topByRating(limit = limit, minMatches = 1)
-                .mapNotNull { profileOf(it.uuid) }
+            val season = call.request.queryParameters["season"]?.toIntOrNull()
+                ?: deps.seasons.currentSeason
+            val top = deps.players.topByRating(season = season, limit = limit, minMatches = 1)
+                .map { stats ->
+                    val record = deps.players.getPlayer(stats.uuid)
+                    PlayerProfile(
+                        uuid = stats.uuid.toString(),
+                        name = record?.name ?: "?",
+                        rating = stats.rating,
+                        placementMatchesRemaining = 0,
+                        wins = stats.wins,
+                        losses = stats.losses,
+                        draws = stats.draws,
+                        tier = Tier.format(stats.rating, isPlaced = true),
+                        season = stats.season,
+                    )
+                }
             call.respond(top)
+        }
+
+        get("/v1/seasons/current") {
+            call.respond(mapOf("season" to deps.seasons.currentSeason))
+        }
+
+        get("/v1/players/{uuid}/matches") {
+            val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
+            if (uuid == null || deps.players.getPlayer(uuid) == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
+                return@get
+            }
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 50) ?: 10
+            val season = call.request.queryParameters["season"]?.toIntOrNull()
+                ?: deps.seasons.currentSeason
+
+            val history = deps.matches.historyFor(uuid, season, limit).map { match ->
+                val isTeamA = match.playerA == uuid
+                val opponentUuid = if (isTeamA) match.playerB else match.playerA
+                val opponent = deps.players.getPlayer(opponentUuid)
+                val result = when (match.outcome) {
+                    MatchOutcome.VOID, null -> "void"
+                    MatchOutcome.DRAW -> "draw"
+                    MatchOutcome.TEAM_A_WIN -> if (isTeamA) "win" else "loss"
+                    MatchOutcome.TEAM_B_WIN -> if (isTeamA) "loss" else "win"
+                }
+                MatchHistoryEntry(
+                    matchId = match.id.toString(),
+                    opponent = PlayerRef(opponentUuid.toString(), opponent?.name ?: "?"),
+                    result = result,
+                    ratingBefore = if (isTeamA) match.ratingABefore else match.ratingBBefore,
+                    ratingAfter = if (isTeamA) match.ratingAAfter else match.ratingBAfter,
+                    durationSeconds = match.durationSeconds,
+                    completedAt = match.completedAt?.epochSecond,
+                )
+            }
+            call.respond(history)
+        }
+
+        // Player report: accused is always the opponent in the given match.
+        post("/v1/reports") {
+            val reporter = authedPlayer(call)
+            if (reporter == null) {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "login required"))
+                return@post
+            }
+            val request = call.receive<ReportRequest>()
+            val matchId = runCatching { UUID.fromString(request.matchId) }.getOrNull()
+            val match = matchId?.let { deps.matches.get(it) }
+            if (match == null || (match.playerA != reporter && match.playerB != reporter)) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
+                return@post
+            }
+            if (deps.reports.existsFor(match.id, reporter)) {
+                call.respond(HttpStatusCode.Conflict, mapOf("error" to "already reported"))
+                return@post
+            }
+            val accused = if (match.playerA == reporter) match.playerB else match.playerA
+            deps.reports.insert(
+                ReportRecord(
+                    id = UUID.randomUUID(),
+                    matchId = match.id,
+                    reporter = reporter,
+                    accused = accused,
+                    reason = request.reason.take(500),
+                    createdAt = java.time.Instant.now(),
+                )
+            )
+            call.respond(HttpStatusCode.OK, mapOf("status" to "reported"))
+        }
+
+        // --- Admin (shared-secret header; disabled unless adminToken is set) ---
+
+        post("/v1/admin/seasons/advance") {
+            if (!isAdmin(call)) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "admin token required"))
+                return@post
+            }
+            call.respond(mapOf("season" to deps.seasons.advance()))
+        }
+
+        get("/v1/admin/reports") {
+            if (!isAdmin(call)) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "admin token required"))
+                return@get
+            }
+            val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 200) ?: 50
+            call.respond(deps.reports.list(limit).map { report ->
+                mapOf(
+                    "id" to report.id.toString(),
+                    "matchId" to report.matchId.toString(),
+                    "reporter" to report.reporter.toString(),
+                    "accused" to report.accused.toString(),
+                    "reason" to report.reason,
+                    "createdAt" to report.createdAt.toString(),
+                )
+            })
+        }
+
+        post("/v1/admin/bans/{uuid}") {
+            if (!isAdmin(call)) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "admin token required"))
+                return@post
+            }
+            val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
+            val player = uuid?.let { deps.players.getPlayer(it) }
+            if (player == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
+                return@post
+            }
+            deps.players.upsertPlayer(player.copy(bannedAt = java.time.Instant.now()))
+            call.respond(mapOf("status" to "banned"))
+        }
+
+        delete("/v1/admin/bans/{uuid}") {
+            if (!isAdmin(call)) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "admin token required"))
+                return@delete
+            }
+            val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
+            val player = uuid?.let { deps.players.getPlayer(it) }
+            if (player == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
+                return@delete
+            }
+            deps.players.upsertPlayer(player.copy(bannedAt = null))
+            call.respond(mapOf("status" to "unbanned"))
         }
 
         if (deps.debugEndpoints) {
@@ -228,9 +401,14 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 close()
                 return@webSocket
             }
-            val player = deps.players.get(playerUuid)
+            val player = deps.players.getPlayer(playerUuid)
             if (player == null) {
                 sendSerialized<QueueServerMessage>(QueueServerMessage.QueueError("unknown player"))
+                close()
+                return@webSocket
+            }
+            if (player.isBanned) {
+                sendSerialized<QueueServerMessage>(QueueServerMessage.QueueError("account banned from ranked play"))
                 close()
                 return@webSocket
             }
@@ -247,7 +425,7 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     sendSerialized<QueueServerMessage>(QueueServerMessage.QueueError("expected join_queue"))
                     return@webSocket
                 }
-                deps.queueService.join(playerUuid, player.rating, join.format)
+                deps.queueService.join(playerUuid, deps.matchService.statsFor(playerUuid).rating, join.format)
 
                 // push queue state until matched or the client disconnects/leaves
                 while (matched.get() == null) {
@@ -291,7 +469,7 @@ fun Application.rankedApi(deps: ApiDependencies) {
 
                     val isTeamA = ready.playerA == playerUuid
                     val opponentUuid = if (isTeamA) ready.playerB else ready.playerA
-                    val opponent = deps.players.get(opponentUuid)
+                    val opponent = deps.players.getPlayer(opponentUuid)
                     sendSerialized<QueueServerMessage>(
                         QueueServerMessage.MatchFound(
                             matchId = ready.id.toString(),

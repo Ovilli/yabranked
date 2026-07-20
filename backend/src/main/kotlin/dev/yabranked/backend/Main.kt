@@ -9,6 +9,7 @@ import dev.yabranked.backend.orchestrator.DockerCliRuntime
 import dev.yabranked.backend.orchestrator.MatchOrchestrator
 import dev.yabranked.backend.orchestrator.OrchestratorConfig
 import dev.yabranked.backend.queue.MatchmakingQueue
+import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.queue.QueueService
 import dev.yabranked.backend.rating.EloRatingSystem
 import dev.yabranked.backend.store.InMemoryMatchStore
@@ -29,7 +30,8 @@ fun main(args: Array<String>) {
     val players = InMemoryPlayerStore()
     val matches = InMemoryMatchStore()
     val rating = EloRatingSystem()
-    val matchService = MatchService(players, matches, rating)
+    val seasons = SeasonService(System.getenv("YABRANKED_SEASON")?.toIntOrNull() ?: 1)
+    val matchService = MatchService(players, matches, rating, seasons)
     val queueService = QueueService(MatchmakingQueue(), matchService)
 
     val verifier = if (fakeAuth) {
@@ -92,6 +94,8 @@ fun main(args: Array<String>) {
                 queueService = queueService,
                 debugEndpoints = fakeAuth,
                 minClientVersion = System.getenv("YABRANKED_MIN_CLIENT_VERSION"),
+                seasons = seasons,
+                adminToken = System.getenv("YABRANKED_ADMIN_TOKEN"),
             )
         )
     }.start(wait = true)

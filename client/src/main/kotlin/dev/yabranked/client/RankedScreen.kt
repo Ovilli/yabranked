@@ -39,8 +39,22 @@ class RankedScreen(
             addRenderableWidget(
                 Button.builder(Component.literal("Leaderboard")) {
                     minecraft.setScreenAndShow(LeaderboardScreen(this))
-                }.bounds(centerX - 100, height / 2 + 14, 200, 20).build()
+                }.bounds(centerX - 100, height / 2 + 14, 98, 20).build()
             )
+            addRenderableWidget(
+                Button.builder(Component.literal("Match History")) {
+                    minecraft.setScreenAndShow(MatchHistoryScreen(this))
+                }.bounds(centerX + 2, height / 2 + 14, 98, 20).build()
+            )
+
+            val lastMatch = RankedState.lastMatch
+            if (lastMatch != null && !RankedState.lastMatchReported) {
+                addRenderableWidget(
+                    Button.builder(Component.literal("Report ${lastMatch.opponent.name}")) {
+                        reportLastMatch(lastMatch)
+                    }.bounds(centerX - 100, height / 2 + 40, 200, 20).build()
+                )
+            }
         }
 
         addRenderableWidget(
@@ -77,6 +91,21 @@ class RankedScreen(
                     is BackendClient.AuthResult.Failed ->
                         RankedState.statusMessage = "§c${result.message}"
                 }
+                refresh()
+            }
+        }
+    }
+
+    private fun reportLastMatch(match: WireQueueServerMessage.MatchFound) {
+        val minecraft = this.minecraft
+        val backend = RankedState.backend ?: return
+        RankedState.statusMessage = "Submitting report..."
+        YabRankedClient.workers.execute {
+            // free-text reasons come later; a generic reason keeps the UI to one click
+            val status = backend.submitReport(match.matchId, "reported via post-match button")
+            minecraft.execute {
+                RankedState.statusMessage = status
+                RankedState.lastMatchReported = true
                 refresh()
             }
         }
@@ -161,7 +190,7 @@ class RankedScreen(
             } else ""
             extractor.centeredText(
                 font,
-                "§e${profile.name}§r — ${profile.rating} MMR$placements",
+                "§e${profile.name}§r — ${profile.tier} · ${profile.rating} MMR$placements §8(Season ${profile.season})",
                 centerX, 40, WHITE,
             )
             extractor.centeredText(

@@ -103,6 +103,44 @@ class BackendClient(
         null
     }
 
+    fun fetchHistory(uuid: String, limit: Int = 10): List<WireHistoryEntry> = try {
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("$baseUrl/v1/players/$uuid/matches?limit=$limit"))
+            .timeout(Duration.ofSeconds(10))
+            .GET()
+            .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() == 200) {
+            json.decodeFromString(response.body())
+        } else emptyList()
+    } catch (e: Exception) {
+        log.warn("history fetch failed", e)
+        emptyList()
+    }
+
+    /** Report the opponent of [matchId]; returns a user-facing status line. */
+    fun submitReport(matchId: String, reason: String): String {
+        val token = session?.token ?: return "Not logged in"
+        return try {
+            val body = json.encodeToString(WireReportRequest.serializer(), WireReportRequest(matchId, reason))
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create("$baseUrl/v1/reports"))
+                .header("Authorization", "Bearer $token")
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(10))
+                .build()
+            when (http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode()) {
+                in 200..299 -> "Report submitted"
+                409 -> "Already reported"
+                else -> "Report failed"
+            }
+        } catch (e: Exception) {
+            log.warn("report failed", e)
+            "Report failed"
+        }
+    }
+
     fun fetchLeaderboard(limit: Int = 25): List<WireProfile> = try {
         val request = HttpRequest.newBuilder()
             .uri(URI.create("$baseUrl/v1/leaderboard?limit=$limit"))

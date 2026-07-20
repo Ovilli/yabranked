@@ -5,6 +5,7 @@ import dev.yabranked.backend.match.MatchService
 import dev.yabranked.backend.queue.MatchmakingQueue
 import dev.yabranked.backend.queue.QueueService
 import dev.yabranked.backend.rating.EloRatingSystem
+import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.InMemoryMatchStore
 import dev.yabranked.backend.store.InMemoryPlayerStore
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -37,7 +38,7 @@ class VersionGateTest {
     fun `auth rejects old or missing client version when gate is set`() = testApplication {
         val players = InMemoryPlayerStore()
         val matches = InMemoryMatchStore()
-        val matchService = MatchService(players, matches, EloRatingSystem())
+        val matchService = MatchService(players, matches, EloRatingSystem(), SeasonService())
         application {
             rankedApi(
                 ApiDependencies(

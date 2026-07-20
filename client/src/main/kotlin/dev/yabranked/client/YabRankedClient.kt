@@ -32,6 +32,8 @@ class YabRankedClient : ClientModInitializer {
             val backend = RankedState.backend ?: return@register
             val before = RankedState.profile
             RankedState.activeMatch = null
+            RankedState.lastMatch = match
+            RankedState.lastMatchReported = false
 
             log.info("left ranked match ${match.matchId}; fetching result")
             workers.execute {

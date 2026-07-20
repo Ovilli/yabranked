@@ -14,6 +14,10 @@ object RankedState {
     /** Set while connected to (or connecting to) a ranked match server. */
     var activeMatch: WireQueueServerMessage.MatchFound? = null
 
+    /** The most recently completed match, kept for the report button. */
+    var lastMatch: WireQueueServerMessage.MatchFound? = null
+    var lastMatchReported: Boolean = false
+
     /** Rating change from the most recently completed match, for display. */
     var lastRatingChange: Int? = null
 

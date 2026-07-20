@@ -3,6 +3,7 @@ package dev.yabranked.backend.match
 import dev.yabranked.backend.queue.QueueEntry
 import dev.yabranked.backend.queue.QueueMatch
 import dev.yabranked.backend.rating.EloRatingSystem
+import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.InMemoryMatchStore
 import dev.yabranked.backend.store.InMemoryPlayerStore
 import dev.yabranked.backend.store.MatchStatus
@@ -21,7 +22,8 @@ class MatchServiceTest {
 
     private val players = InMemoryPlayerStore()
     private val matches = InMemoryMatchStore()
-    private val service = MatchService(players, matches, EloRatingSystem())
+    private val seasons = SeasonService()
+    private val service = MatchService(players, matches, EloRatingSystem(), seasons)
 
     private fun makeMatch(): Pair<UUID, UUID> {
         val a = UUID.randomUUID()
@@ -36,12 +38,15 @@ class MatchServiceTest {
         playerB = QueueEntry(b, 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
     )
 
+    private fun rating(uuid: UUID) = service.statsFor(uuid).rating
+
     @Test
-    fun `create match generates seeds and token`() {
+    fun `create match generates seeds, token, and season`() {
         val (a, b) = makeMatch()
         val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
 
         assertEquals(MatchStatus.PENDING, match.status)
+        assertEquals(seasons.currentSeason, match.season)
         assertTrue(match.serverToken.isNotBlank())
         assertEquals(1000, match.ratingABefore)
         // two matches never share seeds/tokens
@@ -62,13 +67,14 @@ class MatchServiceTest {
         )
 
         assertIs<MatchService.SettleResult.Settled>(result)
-        val playerA = players.get(a)!!
-        val playerB = players.get(b)!!
-        assertTrue(playerA.rating > 1000)
-        assertTrue(playerB.rating < 1000)
-        assertEquals(1, playerA.wins)
-        assertEquals(1, playerB.losses)
-        assertEquals(MatchStatus.COMPLETED, matches.get(match.id)!!.status)
+        assertTrue(rating(a) > 1000)
+        assertTrue(rating(b) < 1000)
+        assertEquals(1, service.statsFor(a).wins)
+        assertEquals(1, service.statsFor(b).losses)
+        val settled = matches.get(match.id)!!
+        assertEquals(MatchStatus.COMPLETED, settled.status)
+        assertEquals(600, settled.durationSeconds)
+        assertEquals(10, settled.teamAScore)
     }
 
     @Test
@@ -82,7 +88,7 @@ class MatchServiceTest {
         )
 
         assertIs<MatchService.SettleResult.BadToken>(result)
-        assertEquals(1000, players.get(a)!!.rating)
+        assertEquals(1000, rating(a))
     }
 
     @Test
@@ -95,7 +101,7 @@ class MatchServiceTest {
         val second = service.settle(report, match.serverToken)
 
         assertIs<MatchService.SettleResult.AlreadySettled>(second)
-        assertEquals(1, players.get(a)!!.wins)
+        assertEquals(1, service.statsFor(a).wins)
     }
 
     @Test
@@ -109,8 +115,8 @@ class MatchServiceTest {
         )
 
         assertIs<MatchService.SettleResult.Settled>(result)
-        assertEquals(1000, players.get(a)!!.rating)
-        assertEquals(0, players.get(a)!!.matchesPlayed)
+        assertEquals(1000, rating(a))
+        assertEquals(0, service.statsFor(a).matchesPlayed)
         assertEquals(MatchStatus.VOIDED, matches.get(match.id)!!.status)
     }
 
@@ -123,7 +129,30 @@ class MatchServiceTest {
             match.serverToken,
         )
         // placement K=80, equal ratings -> +40
-        assertEquals(1040, players.get(a)!!.rating)
-        assertEquals(4, service.placementMatchesRemaining(players.get(a)!!))
+        assertEquals(1040, rating(a))
+        assertEquals(4, service.placementMatchesRemaining(service.statsFor(a)))
+    }
+
+    @Test
+    fun `season advance gives a fresh ladder but keeps history`() {
+        val (a, b) = makeMatch()
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+        service.settle(
+            MatchResultReport(match.id.toString(), MatchOutcome.TEAM_A_WIN, 600, 10, 5),
+            match.serverToken,
+        )
+        val season1 = seasons.currentSeason
+        assertEquals(1040, rating(a))
+        assertEquals(1, matches.historyFor(a, season1, 10).size)
+
+        seasons.advance()
+
+        // fresh rating and placements in the new season
+        assertEquals(1000, rating(a))
+        assertEquals(5, service.placementMatchesRemaining(service.statsFor(a)))
+        // previous season data still queryable
+        assertEquals(1040, players.getStats(a, season1)!!.rating)
+        assertEquals(1, matches.historyFor(a, season1, 10).size)
+        assertEquals(0, matches.historyFor(a, seasons.currentSeason, 10).size)
     }
 }

@@ -77,8 +77,19 @@ Mojang session verification — local development only.
 
 ## API sketch (v1)
 
-- `POST /v1/auth/session` `{username, serverId}` → `{token, profile}` (Mojang `hasJoined` verification)
+- `POST /v1/auth/session` `{username, serverId, clientVersion}` → `{token, profile}` (Mojang `hasJoined` verification; 426 below `YABRANKED_MIN_CLIENT_VERSION`, 403 if banned)
 - `WS /v1/queue?token=…` — `join_queue`/`leave_queue`; server pushes `queue_state`, `match_found`
-- `GET /v1/players/{uuid}` → profile
-- `GET /v1/leaderboard?limit=25`
-- `POST /v1/internal/matches/result` — agent-only, `Authorization: Bearer <per-match server token>`
+- `GET /v1/players/{uuid}` → profile (rating, tier, season, W/L/D)
+- `GET /v1/players/{uuid}/matches?season=&limit=` → match history
+- `GET /v1/leaderboard?season=&limit=25`
+- `GET /v1/seasons/current`
+- `POST /v1/reports` `{matchId, reason}` — player token; accused = opponent; one report per match
+- `POST /v1/internal/matches/ready` / `.../result` — agent-only, `Authorization: Bearer <per-match server token>`
+- Admin (header `X-Admin-Token`, enabled by `YABRANKED_ADMIN_TOKEN`):
+  `POST /v1/admin/seasons/advance` · `GET /v1/admin/reports` ·
+  `POST|DELETE /v1/admin/bans/{uuid}`
+
+Tiers: Coal/Iron/Gold/Emerald/Diamond (divisions I–III) and open-ended
+Netherite from 1800; Unranked during the 5 placement matches. Seasons scope
+ratings, placements, leaderboard, and history; start season via
+`YABRANKED_SEASON`, advance via the admin endpoint.

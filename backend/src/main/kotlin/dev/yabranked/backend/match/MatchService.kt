@@ -3,11 +3,13 @@ package dev.yabranked.backend.match
 import dev.yabranked.backend.queue.QueueMatch
 import dev.yabranked.backend.rating.RatingState
 import dev.yabranked.backend.rating.RatingSystem
+import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.MatchRecord
 import dev.yabranked.backend.store.MatchStatus
 import dev.yabranked.backend.store.MatchStore
 import dev.yabranked.backend.store.PlayerRecord
 import dev.yabranked.backend.store.PlayerStore
+import dev.yabranked.backend.store.SeasonStats
 import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchResultReport
@@ -19,13 +21,14 @@ import java.util.UUID
 
 /**
  * Creates match records from queue matches and settles reported results.
- * Provisioning the actual game server is the orchestrator's job (Phase 2) —
- * it subscribes via [onMatchCreated].
+ * Provisioning the actual game server is the orchestrator's job — it
+ * subscribes via [onMatchCreated] / [onMatchSettled].
  */
 class MatchService(
     private val players: PlayerStore,
     private val matches: MatchStore,
     private val rating: RatingSystem,
+    private val seasons: SeasonService,
     private val placementMatches: Int = 5,
     private val clock: Clock = Clock.systemUTC(),
     private val random: SecureRandom = SecureRandom(),
@@ -40,6 +43,34 @@ class MatchService(
     fun onMatchSettled(listener: (MatchRecord) -> Unit) {
         settledListeners += listener
     }
+
+    fun getOrCreatePlayer(uuid: UUID, name: String): PlayerRecord {
+        val existing = players.getPlayer(uuid)
+        val record = when {
+            existing == null -> PlayerRecord(uuid = uuid, name = name, createdAt = clock.instant())
+            existing.name != name -> existing.copy(name = name) // MC accounts can rename
+            else -> existing
+        }
+        if (record !== existing) players.upsertPlayer(record)
+        return record
+    }
+
+    /** Current-season stats, created at the initial rating on first touch. */
+    fun statsFor(uuid: UUID): SeasonStats {
+        val season = seasons.currentSeason
+        return players.getStats(uuid, season) ?: SeasonStats(
+            uuid = uuid,
+            season = season,
+            rating = rating.initialRating,
+            matchesPlayed = 0,
+            wins = 0,
+            losses = 0,
+            draws = 0,
+        ).also(players::upsertStats)
+    }
+
+    fun placementMatchesRemaining(stats: SeasonStats): Int =
+        (placementMatches - stats.matchesPlayed).coerceAtLeast(0)
 
     /** Orchestrator: record where the provisioned server for this match lives. */
     fun setServerAddress(matchId: UUID, address: String) {
@@ -86,38 +117,16 @@ class MatchService(
         settledListeners.forEach { it(voided) }
     }
 
-    fun getOrCreatePlayer(uuid: UUID, name: String): PlayerRecord {
-        players.get(uuid)?.let {
-            // keep name current (players can rename their MC account)
-            if (it.name != name) players.upsert(it.copy(name = name))
-            return players.get(uuid)!!
-        }
-        val record = PlayerRecord(
-            uuid = uuid,
-            name = name,
-            rating = rating.initialRating,
-            matchesPlayed = 0,
-            wins = 0,
-            losses = 0,
-            draws = 0,
-            createdAt = clock.instant(),
-        )
-        players.upsert(record)
-        return record
-    }
-
-    fun placementMatchesRemaining(player: PlayerRecord): Int =
-        (placementMatches - player.matchesPlayed).coerceAtLeast(0)
-
     fun createMatch(queueMatch: QueueMatch, format: MatchFormat): MatchRecord {
-        val a = players.get(queueMatch.playerA.uuid) ?: error("unknown player ${queueMatch.playerA.uuid}")
-        val b = players.get(queueMatch.playerB.uuid) ?: error("unknown player ${queueMatch.playerB.uuid}")
+        val statsA = statsFor(queueMatch.playerA.uuid)
+        val statsB = statsFor(queueMatch.playerB.uuid)
 
         val token = ByteArray(32).also(random::nextBytes)
             .let { Base64.getUrlEncoder().withoutPadding().encodeToString(it) }
 
         val record = MatchRecord(
             id = UUID.randomUUID(),
+            season = seasons.currentSeason,
             format = format,
             settings = MatchSettings(
                 format = format,
@@ -125,13 +134,13 @@ class MatchService(
                 cardSeed = random.nextLong(),
                 timeLimitSeconds = DEFAULT_TIME_LIMIT_SECONDS,
             ),
-            playerA = a.uuid,
-            playerB = b.uuid,
+            playerA = statsA.uuid,
+            playerB = statsB.uuid,
             status = MatchStatus.PENDING,
             serverToken = token,
             outcome = null,
-            ratingABefore = a.rating,
-            ratingBBefore = b.rating,
+            ratingABefore = statsA.rating,
+            ratingBBefore = statsB.rating,
             ratingAAfter = null,
             ratingBAfter = null,
             createdAt = clock.instant(),
@@ -165,32 +174,34 @@ class MatchService(
         if (match.status == MatchStatus.COMPLETED || match.status == MatchStatus.VOIDED)
             return SettleResult.AlreadySettled
 
-        val a = players.get(match.playerA) ?: error("player ${match.playerA} missing at settle")
-        val b = players.get(match.playerB) ?: error("player ${match.playerB} missing at settle")
+        val statsA = players.getStats(match.playerA, match.season)
+            ?: error("stats for ${match.playerA} missing at settle")
+        val statsB = players.getStats(match.playerB, match.season)
+            ?: error("stats for ${match.playerB} missing at settle")
 
         val update = rating.update(
-            playerA = RatingState(a.rating, a.matchesPlayed),
-            playerB = RatingState(b.rating, b.matchesPlayed),
+            playerA = RatingState(statsA.rating, statsA.matchesPlayed),
+            playerB = RatingState(statsB.rating, statsB.matchesPlayed),
             outcome = report.outcome,
         )
 
         if (report.outcome != MatchOutcome.VOID) {
-            players.upsert(
-                a.copy(
+            players.upsertStats(
+                statsA.copy(
                     rating = update.playerA.rating,
                     matchesPlayed = update.playerA.matchesPlayed,
-                    wins = a.wins + if (report.outcome == MatchOutcome.TEAM_A_WIN) 1 else 0,
-                    losses = a.losses + if (report.outcome == MatchOutcome.TEAM_B_WIN) 1 else 0,
-                    draws = a.draws + if (report.outcome == MatchOutcome.DRAW) 1 else 0,
+                    wins = statsA.wins + if (report.outcome == MatchOutcome.TEAM_A_WIN) 1 else 0,
+                    losses = statsA.losses + if (report.outcome == MatchOutcome.TEAM_B_WIN) 1 else 0,
+                    draws = statsA.draws + if (report.outcome == MatchOutcome.DRAW) 1 else 0,
                 )
             )
-            players.upsert(
-                b.copy(
+            players.upsertStats(
+                statsB.copy(
                     rating = update.playerB.rating,
                     matchesPlayed = update.playerB.matchesPlayed,
-                    wins = b.wins + if (report.outcome == MatchOutcome.TEAM_B_WIN) 1 else 0,
-                    losses = b.losses + if (report.outcome == MatchOutcome.TEAM_A_WIN) 1 else 0,
-                    draws = b.draws + if (report.outcome == MatchOutcome.DRAW) 1 else 0,
+                    wins = statsB.wins + if (report.outcome == MatchOutcome.TEAM_B_WIN) 1 else 0,
+                    losses = statsB.losses + if (report.outcome == MatchOutcome.TEAM_A_WIN) 1 else 0,
+                    draws = statsB.draws + if (report.outcome == MatchOutcome.DRAW) 1 else 0,
                 )
             )
         }
@@ -200,6 +211,9 @@ class MatchService(
             outcome = report.outcome,
             ratingAAfter = update.playerA.rating,
             ratingBAfter = update.playerB.rating,
+            durationSeconds = report.durationSeconds,
+            teamAScore = report.teamAScore,
+            teamBScore = report.teamBScore,
             completedAt = clock.instant(),
         )
         matches.update(settled)

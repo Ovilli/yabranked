@@ -34,9 +34,32 @@ data class PlayerProfile(
     val wins: Int,
     val losses: Int,
     val draws: Int,
+    /** Display tier, e.g. "Gold II" or "Unranked" during placements. */
+    val tier: String = "Unranked",
+    val season: Int = 1,
 ) {
     val isPlaced: Boolean get() = placementMatchesRemaining <= 0
 }
+
+/** One row of a player's match history, from that player's perspective. */
+@Serializable
+data class MatchHistoryEntry(
+    val matchId: String,
+    val opponent: PlayerRef,
+    /** "win" | "loss" | "draw" | "void" */
+    val result: String,
+    val ratingBefore: Int,
+    val ratingAfter: Int?,
+    val durationSeconds: Long?,
+    /** Epoch seconds of match completion (null if still running). */
+    val completedAt: Long?,
+)
+
+@Serializable
+data class ReportRequest(
+    val matchId: String,
+    val reason: String,
+)
 
 @Serializable
 enum class MatchTeam {

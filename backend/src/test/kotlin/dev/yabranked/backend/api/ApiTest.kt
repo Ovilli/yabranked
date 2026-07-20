@@ -7,6 +7,7 @@ import dev.yabranked.backend.queue.QueueEntry
 import dev.yabranked.backend.queue.QueueMatch
 import dev.yabranked.backend.queue.QueueService
 import dev.yabranked.backend.rating.EloRatingSystem
+import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.InMemoryMatchStore
 import dev.yabranked.backend.store.InMemoryPlayerStore
 import dev.yabranked.proto.MatchFormat
@@ -35,7 +36,7 @@ class ApiTest {
 
     private val players = InMemoryPlayerStore()
     private val matches = InMemoryMatchStore()
-    private val matchService = MatchService(players, matches, EloRatingSystem())
+    private val matchService = MatchService(players, matches, EloRatingSystem(), SeasonService())
     private val queueService = QueueService(MatchmakingQueue(), matchService)
 
     private fun deps() = ApiDependencies(

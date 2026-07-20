@@ -24,6 +24,25 @@ data class WireProfile(
     val wins: Int,
     val losses: Int,
     val draws: Int,
+    val tier: String = "Unranked",
+    val season: Int = 1,
+)
+
+@Serializable
+data class WireHistoryEntry(
+    val matchId: String,
+    val opponent: WirePlayerRef,
+    val result: String,
+    val ratingBefore: Int,
+    val ratingAfter: Int?,
+    val durationSeconds: Long?,
+    val completedAt: Long?,
+)
+
+@Serializable
+data class WireReportRequest(
+    val matchId: String,
+    val reason: String,
 )
 
 @Serializable
