@@ -5,17 +5,21 @@ CREATE TABLE IF NOT EXISTS players (
     uuid            uuid PRIMARY KEY,
     name            text NOT NULL,
     banned_at       timestamptz,
-    created_at      timestamptz NOT NULL DEFAULT now()
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    country         text,
+    background      text NOT NULL DEFAULT 'default'
 );
 
 CREATE TABLE IF NOT EXISTS season_stats (
-    uuid            uuid NOT NULL REFERENCES players (uuid),
-    season          integer NOT NULL,
-    rating          integer NOT NULL,
-    matches_played  integer NOT NULL DEFAULT 0,
-    wins            integer NOT NULL DEFAULT 0,
-    losses          integer NOT NULL DEFAULT 0,
-    draws           integer NOT NULL DEFAULT 0,
+    uuid             uuid NOT NULL REFERENCES players (uuid),
+    season           integer NOT NULL,
+    rating           integer NOT NULL,
+    matches_played   integer NOT NULL DEFAULT 0,
+    wins             integer NOT NULL DEFAULT 0,
+    losses           integer NOT NULL DEFAULT 0,
+    draws            integer NOT NULL DEFAULT 0,
+    playtime_seconds bigint NOT NULL DEFAULT 0,
+    forfeits         integer NOT NULL DEFAULT 0,
     PRIMARY KEY (uuid, season)
 );
 
@@ -39,6 +43,7 @@ CREATE TABLE IF NOT EXISTS matches (
     duration_s       bigint,
     team_a_score     integer,
     team_b_score     integer,
+    forfeited_by     uuid,
     created_at       timestamptz NOT NULL DEFAULT now(),
     completed_at     timestamptz
 );
@@ -62,3 +67,14 @@ CREATE TABLE IF NOT EXISTS settings (
     key    text PRIMARY KEY,
     value  text NOT NULL
 );
+
+-- Idempotent migrations for databases created before these columns existed.
+-- CREATE TABLE IF NOT EXISTS above never alters an existing table, so add the
+-- newer columns here. ADD COLUMN IF NOT EXISTS is a no-op on fresh schemas.
+ALTER TABLE players ADD COLUMN IF NOT EXISTS country text;
+ALTER TABLE players ADD COLUMN IF NOT EXISTS background text NOT NULL DEFAULT 'default';
+
+ALTER TABLE season_stats ADD COLUMN IF NOT EXISTS playtime_seconds bigint NOT NULL DEFAULT 0;
+ALTER TABLE season_stats ADD COLUMN IF NOT EXISTS forfeits integer NOT NULL DEFAULT 0;
+
+ALTER TABLE matches ADD COLUMN IF NOT EXISTS forfeited_by uuid;

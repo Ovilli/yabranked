@@ -38,6 +38,8 @@ data class WireResultReport(
     val durationSeconds: Long,
     val teamAScore: Int,
     val teamBScore: Int,
+    /** UUID of the player who forfeited (concede or no-show), null for a normal finish. */
+    val forfeitedBy: String? = null,
 )
 
 class BackendReporter(

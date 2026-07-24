@@ -11,6 +11,9 @@ object RankedState {
     var queue: BackendClient.QueueSocket? = null
     var queueStatus: String? = null
 
+    /** Format the player has selected on the ranked screen; drives the next queue join. */
+    var selectedFormat: WireFormat = WireFormat.default
+
     /** Latest queue tick from the server, rendered as the searching panel. */
     var queueSnapshot: WireQueueServerMessage.QueueState? = null
 
@@ -27,7 +30,36 @@ object RankedState {
     /** Rating change from the most recently completed match, for display. */
     var lastRatingChange: Int? = null
 
+    /** Current consecutive-win streak, derived from recent history; 0 when the
+     *  latest match was not a win. Shown on the profile and result screens. */
+    var winStreak: Int = 0
+
     var statusMessage: String? = null
+
+    // UI flags to drive context-sensitive shortcuts without querying MC internals
+    @Volatile var onRankedScreen: Boolean = false
+    @Volatile var onResultScreen: Boolean = false
+
+    /** True while [MatchResultLoadingScreen] is the active screen, so the
+     *  disconnect poll only replaces it if the player hasn't navigated away. */
+    @Volatile var onResultLoading: Boolean = false
+
+    // Visual toggles, edited on RankedOptionsScreen and persisted via Config.
+    var showFlags: Boolean = true
+    var hideOwnFlag: Boolean = false
+    /** Hide your own MMR on the profile / result screens. */
+    var hideElo: Boolean = false
+    /** Hide the opponent's MMR on the match-found screen and in-match HUD. */
+    var hideOpponentElo: Boolean = false
+
+    /** Consecutive wins from the front of a newest-first history list. */
+    fun currentWinStreak(entries: List<WireHistoryEntry>): Int {
+        var n = 0
+        for (e in entries) {
+            if (e.result == "win") n++ else break
+        }
+        return n
+    }
 
     val isAuthenticated: Boolean get() = backend?.session != null
     val isQueued: Boolean get() = queue != null
@@ -38,6 +70,12 @@ object RankedState {
         queueStatus = null
         queueSnapshot = null
         activeMatch = null
+        matchStartedAt = null
+        lastMatch = null
+        lastMatchReported = false
+        lastRatingChange = null
         statusMessage = null
+        // Do not clear backend/profile here automatically, as reset may be
+        // used for transient UI cleanup while the session stays valid.
     }
 }

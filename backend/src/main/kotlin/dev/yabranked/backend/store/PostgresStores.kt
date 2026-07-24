@@ -53,6 +53,8 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         name = getString("name"),
         bannedAt = instant("banned_at"),
         createdAt = instant("created_at")!!,
+        country = getString("country"),
+        background = getString("background") ?: "default",
     )
 
     private fun ResultSet.toStats() = SeasonStats(
@@ -63,6 +65,8 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         wins = getInt("wins"),
         losses = getInt("losses"),
         draws = getInt("draws"),
+        playtimeSeconds = getLong("playtime_seconds"),
+        forfeits = getInt("forfeits"),
     )
 
     override fun getPlayer(uuid: UUID): PlayerRecord? = db.withConnection { c ->
@@ -76,14 +80,18 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         db.withConnection { c ->
             c.prepareStatement(
                 """
-                INSERT INTO players (uuid, name, banned_at, created_at) VALUES (?, ?, ?, ?)
-                ON CONFLICT (uuid) DO UPDATE SET name = excluded.name, banned_at = excluded.banned_at
+                INSERT INTO players (uuid, name, banned_at, created_at, country, background)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (uuid) DO UPDATE SET name = excluded.name, banned_at = excluded.banned_at,
+                    country = excluded.country, background = excluded.background
                 """.trimIndent()
             ).use { s ->
                 s.setObject(1, record.uuid)
                 s.setString(2, record.name)
                 s.setTimestamp(3, record.bannedAt?.let(Timestamp::from))
                 s.setTimestamp(4, Timestamp.from(record.createdAt))
+                s.setString(5, record.country)
+                s.setString(6, record.background)
                 s.executeUpdate()
             }
         }
@@ -101,11 +109,13 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         db.withConnection { c ->
             c.prepareStatement(
                 """
-                INSERT INTO season_stats (uuid, season, rating, matches_played, wins, losses, draws)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO season_stats
+                    (uuid, season, rating, matches_played, wins, losses, draws, playtime_seconds, forfeits)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (uuid, season) DO UPDATE SET
                     rating = excluded.rating, matches_played = excluded.matches_played,
-                    wins = excluded.wins, losses = excluded.losses, draws = excluded.draws
+                    wins = excluded.wins, losses = excluded.losses, draws = excluded.draws,
+                    playtime_seconds = excluded.playtime_seconds, forfeits = excluded.forfeits
                 """.trimIndent()
             ).use { s ->
                 s.setObject(1, stats.uuid)
@@ -115,6 +125,8 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
                 s.setInt(5, stats.wins)
                 s.setInt(6, stats.losses)
                 s.setInt(7, stats.draws)
+                s.setLong(8, stats.playtimeSeconds)
+                s.setInt(9, stats.forfeits)
                 s.executeUpdate()
             }
         }
@@ -179,6 +191,7 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         durationSeconds = getObject("duration_s")?.let { (it as Number).toLong() },
         teamAScore = getObject("team_a_score") as Int?,
         teamBScore = getObject("team_b_score") as Int?,
+        forfeitedBy = getObject("forfeited_by", UUID::class.java),
         createdAt = instant("created_at")!!,
         completedAt = instant("completed_at"),
     )
@@ -205,6 +218,7 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         s.setObject(19, m.teamBScore)
         s.setTimestamp(20, Timestamp.from(m.createdAt))
         s.setTimestamp(21, m.completedAt?.let(Timestamp::from))
+        s.setObject(22, m.forfeitedBy)
     }
 
     override fun get(id: UUID): MatchRecord? = db.withConnection { c ->
@@ -221,8 +235,8 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 INSERT INTO matches (id, season, format, world_seed, card_seed, time_limit_s,
                     player_a, player_b, status, server_token, server_address, outcome,
                     rating_a_before, rating_b_before, rating_a_after, rating_b_after,
-                    duration_s, team_a_score, team_b_score, created_at, completed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    duration_s, team_a_score, team_b_score, created_at, completed_at, forfeited_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent()
             ).use { s ->
                 bind(s, record)
@@ -237,7 +251,7 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 """
                 UPDATE matches SET status = ?, server_address = ?, outcome = ?,
                     rating_a_after = ?, rating_b_after = ?, duration_s = ?,
-                    team_a_score = ?, team_b_score = ?, completed_at = ?
+                    team_a_score = ?, team_b_score = ?, forfeited_by = ?, completed_at = ?
                 WHERE id = ?
                 """.trimIndent()
             ).use { s ->
@@ -249,8 +263,9 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 s.setObject(6, record.durationSeconds)
                 s.setObject(7, record.teamAScore)
                 s.setObject(8, record.teamBScore)
-                s.setTimestamp(9, record.completedAt?.let(Timestamp::from))
-                s.setObject(10, record.id)
+                s.setObject(9, record.forfeitedBy)
+                s.setTimestamp(10, record.completedAt?.let(Timestamp::from))
+                s.setObject(11, record.id)
                 s.executeUpdate()
             }
         }

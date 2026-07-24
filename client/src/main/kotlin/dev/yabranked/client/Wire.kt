@@ -9,10 +9,34 @@ import kotlinx.serialization.Serializable
  * TODO(later): publish proto as a nested-jar-capable artifact and share it.
  */
 
+/**
+ * Client-side mirror of the queueable formats in dev.yabranked.proto.MatchFormat.
+ * Kept in sync by hand until the proto module can be shared with the mod jar.
+ */
+data class WireFormat(
+    val id: String,
+    val displayName: String,
+    /** Rated formats affect MMR; casual ones do not. */
+    val ranked: Boolean,
+) {
+    companion object {
+        val all = listOf(
+            WireFormat("lockout_1v1", "Lockout 1v1", ranked = true),
+            WireFormat("casual_lockout", "Casual Lockout", ranked = false),
+            WireFormat("casual_standard", "Casual Standard", ranked = false),
+            WireFormat("casual_blackout", "Casual Blackout", ranked = false),
+            WireFormat("casual_hidden", "Casual Hidden Items", ranked = false),
+        )
+        val default = all.first()
+    }
+}
+
 @Serializable
 data class WirePlayerRef(
     val uuid: String,
     val name: String,
+    /** ISO 3166-1 alpha-2 country code (lowercase), null if unset. */
+    val country: String? = null,
 )
 
 @Serializable
@@ -27,6 +51,21 @@ data class WireProfile(
     val tier: String = "Unranked",
     val season: Int = 1,
     val rank: Int? = null,
+    /** ISO 3166-1 alpha-2 country code (lowercase), null if the player set none. */
+    val country: String? = null,
+    /** Profile-card background id; "default" when unset. */
+    val background: String = "default",
+    /** Total seconds spent in counted matches this season. */
+    val playtimeSeconds: Long = 0,
+    /** Matches this player forfeited this season. */
+    val forfeits: Int = 0,
+)
+
+/** Self-profile edit. A field left null is unchanged; country "" clears the flag. */
+@Serializable
+data class WireProfileUpdate(
+    val country: String? = null,
+    val background: String? = null,
 )
 
 @Serializable

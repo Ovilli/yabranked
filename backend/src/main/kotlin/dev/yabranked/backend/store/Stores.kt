@@ -13,6 +13,10 @@ data class PlayerRecord(
     val name: String,
     val bannedAt: Instant? = null,
     val createdAt: Instant,
+    /** ISO 3166-1 alpha-2 country code (lowercase), null if unset. */
+    val country: String? = null,
+    /** Profile-card background id; "default" when unset. */
+    val background: String = "default",
 ) {
     val isBanned: Boolean get() = bannedAt != null
 }
@@ -26,6 +30,10 @@ data class SeasonStats(
     val wins: Int,
     val losses: Int,
     val draws: Int,
+    /** Cumulative seconds spent in counted matches this season. */
+    val playtimeSeconds: Long = 0,
+    /** Matches this player forfeited (concede or no-show) this season. */
+    val forfeits: Int = 0,
 )
 
 enum class MatchStatus {
@@ -59,6 +67,8 @@ data class MatchRecord(
     val durationSeconds: Long? = null,
     val teamAScore: Int? = null,
     val teamBScore: Int? = null,
+    /** Player who forfeited this match (concede or no-show), null for a normal finish. */
+    val forfeitedBy: UUID? = null,
     val createdAt: Instant,
     val completedAt: Instant?,
 )

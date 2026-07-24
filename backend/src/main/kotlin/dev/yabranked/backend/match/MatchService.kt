@@ -185,6 +185,8 @@ class MatchService(
             outcome = report.outcome,
         )
 
+        val forfeitedBy = report.forfeitedBy?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+
         // casual formats record the match but never touch the ladder
         if (report.outcome != MatchOutcome.VOID && match.format.ranked) {
             players.upsertStats(
@@ -194,6 +196,8 @@ class MatchService(
                     wins = statsA.wins + if (report.outcome == MatchOutcome.TEAM_A_WIN) 1 else 0,
                     losses = statsA.losses + if (report.outcome == MatchOutcome.TEAM_B_WIN) 1 else 0,
                     draws = statsA.draws + if (report.outcome == MatchOutcome.DRAW) 1 else 0,
+                    playtimeSeconds = statsA.playtimeSeconds + report.durationSeconds,
+                    forfeits = statsA.forfeits + if (forfeitedBy == match.playerA) 1 else 0,
                 )
             )
             players.upsertStats(
@@ -203,6 +207,8 @@ class MatchService(
                     wins = statsB.wins + if (report.outcome == MatchOutcome.TEAM_B_WIN) 1 else 0,
                     losses = statsB.losses + if (report.outcome == MatchOutcome.TEAM_A_WIN) 1 else 0,
                     draws = statsB.draws + if (report.outcome == MatchOutcome.DRAW) 1 else 0,
+                    playtimeSeconds = statsB.playtimeSeconds + report.durationSeconds,
+                    forfeits = statsB.forfeits + if (forfeitedBy == match.playerB) 1 else 0,
                 )
             )
         }
@@ -215,6 +221,7 @@ class MatchService(
             durationSeconds = report.durationSeconds,
             teamAScore = report.teamAScore,
             teamBScore = report.teamBScore,
+            forfeitedBy = forfeitedBy,
             completedAt = clock.instant(),
         )
         matches.update(settled)

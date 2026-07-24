@@ -1,6 +1,9 @@
 package dev.yabranked.client
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import java.math.BigInteger
 import java.net.URI
@@ -136,6 +139,40 @@ class BackendClient(
         null
     }
 
+    /**
+     * Update your own profile. [country] is a 2-letter code, "" to clear the
+     * flag, or null to leave unchanged. Returns the refreshed profile, or null
+     * on failure. Also refreshes the cached [session] profile on success.
+     */
+    fun updateProfile(country: String? = null, background: String? = null): WireProfile? {
+        val token = session?.token ?: return null
+        return try {
+            val body = json.encodeToString(
+                WireProfileUpdate.serializer(),
+                WireProfileUpdate(country, background),
+            )
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create("$baseUrl/v1/players/me"))
+                .header("Authorization", "Bearer $token")
+                .header("Content-Type", "application/json")
+                .PUT(HttpRequest.BodyPublishers.ofString(body))
+                .timeout(Duration.ofSeconds(10))
+                .build()
+            val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() in 200..299) {
+                val profile = json.decodeFromString(WireProfile.serializer(), response.body())
+                session = session?.copy(profile = profile)
+                profile
+            } else {
+                log.warn("profile update failed: ${response.statusCode()} ${response.body()}")
+                null
+            }
+        } catch (e: Exception) {
+            log.warn("profile update request failed", e)
+            null
+        }
+    }
+
     /** Report the opponent of [matchId]; returns a user-facing status line. */
     fun submitReport(matchId: String, reason: String): String {
         val token = session?.token ?: return "Not logged in"
@@ -159,9 +196,10 @@ class BackendClient(
         }
     }
 
-    fun fetchLeaderboard(limit: Int = 25): List<WireProfile> = try {
+    fun fetchLeaderboard(limit: Int = 25, season: Int? = null): List<WireProfile> = try {
+        val seasonParam = season?.let { "&season=$it" } ?: ""
         val request = HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl/v1/leaderboard?limit=$limit"))
+            .uri(URI.create("$baseUrl/v1/leaderboard?limit=$limit$seasonParam"))
             .timeout(Duration.ofSeconds(10))
             .GET()
             .build()
@@ -172,6 +210,24 @@ class BackendClient(
     } catch (e: Exception) {
         log.warn("leaderboard fetch failed", e)
         emptyList()
+    }
+
+    /** Current season number; falls back to 1 when the call fails. */
+    fun fetchCurrentSeason(): Int = try {
+        val request = HttpRequest.newBuilder()
+            .uri(URI.create("$baseUrl/v1/seasons/current"))
+            .timeout(Duration.ofSeconds(10))
+            .GET()
+            .build()
+        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+        if (response.statusCode() == 200) {
+            json.parseToJsonElement(response.body()).let {
+                it.jsonObject["season"]?.jsonPrimitive?.int ?: 1
+            }
+        } else 1
+    } catch (e: Exception) {
+        log.warn("season fetch failed", e)
+        1
     }
 
     /** An open queue WebSocket; close it to leave the queue. */

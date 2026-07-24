@@ -16,6 +16,7 @@ import dev.yabranked.proto.MatchResultReport
 import dev.yabranked.proto.MatchTeam
 import dev.yabranked.proto.PlayerProfile
 import dev.yabranked.proto.PlayerRef
+import dev.yabranked.proto.ProfileUpdate
 import dev.yabranked.proto.QueueClientMessage
 import dev.yabranked.proto.QueueServerMessage
 import dev.yabranked.proto.ReportRequest
@@ -31,6 +32,7 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import io.ktor.server.routing.routing
 import io.ktor.server.websocket.WebSockets
 import io.ktor.server.websocket.receiveDeserialized
@@ -142,6 +144,10 @@ fun Application.rankedApi(deps: ApiDependencies) {
             tier = Tier.format(stats.rating, isPlaced = placements <= 0),
             season = stats.season,
             rank = deps.players.rankOf(uuid, stats.season, minMatches = 1),
+            country = record.country,
+            background = record.background,
+            playtimeSeconds = stats.playtimeSeconds,
+            forfeits = stats.forfeits,
         )
     }
 
@@ -186,6 +192,41 @@ fun Application.rankedApi(deps: ApiDependencies) {
             call.respond(SessionResponse(token, profileOf(verified.uuid)!!))
         }
 
+        // Edit your own profile (country flag, card background). Player-token auth.
+        put("/v1/players/me") {
+            val self = authedPlayer(call)
+            if (self == null) {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "not signed in"))
+                return@put
+            }
+            val update = runCatching { call.receive<ProfileUpdate>() }.getOrNull()
+            if (update == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "malformed body"))
+                return@put
+            }
+            // country: "" clears it; a value must be a 2-letter alpha code. Leave
+            // unchanged when the field is absent (null).
+            val newCountry: String? = when (val c = update.country) {
+                null -> null // sentinel handled below
+                "" -> null
+                else -> c.lowercase().takeIf { it.length == 2 && it.all { ch -> ch in 'a'..'z' } }
+                    ?: run {
+                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to "invalid country code"))
+                        return@put
+                    }
+            }
+            val record = deps.players.getPlayer(self)
+            if (record == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
+                return@put
+            }
+            // "country" present (even blank) → set/clear; absent → keep as-is.
+            val country = if (update.country == null) record.country else newCountry
+            val background = update.background?.ifBlank { "default" } ?: record.background
+            deps.players.upsertPlayer(record.copy(country = country, background = background))
+            call.respond(profileOf(self)!!)
+        }
+
         get("/v1/players/{uuid}") {
             val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
             val profile = uuid?.let(::profileOf)
@@ -214,6 +255,8 @@ fun Application.rankedApi(deps: ApiDependencies) {
                         draws = stats.draws,
                         tier = Tier.format(stats.rating, isPlaced = true),
                         season = stats.season,
+                        country = record?.country,
+                        background = record?.background ?: "default",
                     )
                 }
             call.respond(top)

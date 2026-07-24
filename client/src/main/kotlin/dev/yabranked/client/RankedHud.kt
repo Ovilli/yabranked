@@ -32,7 +32,11 @@ class RankedHud : HudElement {
         } ?: "—"
 
         val opponent = "vs ${match.opponent.name}"
-        val rating = if (match.opponentRating > 0) "${match.opponentRating} MMR" else match.opponentTier
+        val rating = when {
+            RankedState.hideOpponentElo -> match.opponentTier
+            match.opponentRating > 0 -> "${match.opponentRating} MMR"
+            else -> match.opponentTier
+        }
         val width = maxOf(font.width(opponent), font.width(rating)) + 44
 
         val x = 4

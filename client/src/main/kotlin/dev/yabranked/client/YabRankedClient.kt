@@ -26,8 +26,17 @@ import java.util.concurrent.Executors
 class YabRankedClient : ClientModInitializer {
 
     private lateinit var openRankedKey: KeyMapping
+    private lateinit var joinQueueKey: KeyMapping
+    private lateinit var leaveQueueKey: KeyMapping
+    private lateinit var historyKey: KeyMapping
+
+    /** Ticks left to force-claim the result-loading screen after a match ends,
+     *  overriding vanilla's disconnect / server-list screen before it renders. */
+    private var resultClaimTicks = 0
 
     override fun onInitializeClient() {
+        Config.load()
+
         // "Ranked" button in the top-right corner of the title screen
         ScreenEvents.AFTER_INIT.register { _, screen, scaledWidth, _ ->
             if (screen is TitleScreen) {
@@ -75,10 +84,77 @@ class YabRankedClient : ClientModInitializer {
             )
         )
 
+        // Screen-local shortcuts (active only when the relevant screen is open)
+        joinQueueKey = KeyMappingHelper.registerKeyMapping(
+            KeyMapping(
+                "key.yabranked.join",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_J,
+                KeyMapping.Category.MISC,
+            )
+        )
+        leaveQueueKey = KeyMappingHelper.registerKeyMapping(
+            KeyMapping(
+                "key.yabranked.leave",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_L,
+                KeyMapping.Category.MISC,
+            )
+        )
+        historyKey = KeyMappingHelper.registerKeyMapping(
+            KeyMapping(
+                "key.yabranked.history",
+                InputConstants.Type.KEYSYM,
+                GLFW.GLFW_KEY_H,
+                KeyMapping.Category.MISC,
+            )
+        )
+
         ClientTickEvents.END_CLIENT_TICK.register { client ->
+            // Force-claim the result-loading screen for a few ticks after a match
+            // ends. This END_CLIENT_TICK callback runs after vanilla has set its
+            // disconnect / server-list screen, so re-showing ours here overrides
+            // it before the frame renders — no flash. (No public getter for the
+            // current screen in this mapping, so we claim for a short window
+            // rather than testing what is currently shown.)
+            if (resultClaimTicks > 0 && RankedState.onResultLoading) {
+                resultClaimTicks--
+                client.setScreenAndShow(
+                    MatchResultLoadingScreen(RankedState.lastMatch?.opponent?.name ?: "opponent")
+                )
+            }
+
+            // Global hotkey: open Ranked from anywhere. On the result screen,
+            // reuse R to trigger Queue Again and go to Ranked.
             while (openRankedKey.consumeClick()) {
-                // null parent: closing returns to the game rather than a menu
-                client.setScreenAndShow(RankedScreen(null))
+                if (RankedState.onResultScreen) {
+                    if (!RankedState.isQueued && RankedState.isAuthenticated) {
+                        RankedQueue.join()
+                    }
+                    client.setScreenAndShow(RankedScreen(TitleScreen()))
+                } else {
+                    // null parent: closing returns to the game rather than a menu
+                    client.setScreenAndShow(RankedScreen(null))
+                }
+            }
+
+            if (RankedState.onRankedScreen) {
+                while (joinQueueKey.consumeClick()) {
+                    if (!RankedState.isQueued) {
+                        if (RankedState.isAuthenticated) {
+                            RankedQueue.join()
+                        } else {
+                            RankedToast.showInfo("Can't join", "Please sign in first")
+                        }
+                    }
+                }
+                while (leaveQueueKey.consumeClick()) {
+                    if (RankedState.isQueued) RankedQueue.leave()
+                }
+                while (historyKey.consumeClick()) {
+                    // Open history with a fresh Ranked screen as parent for a clean back path
+                    client.setScreenAndShow(MatchHistoryScreen(RankedScreen(null)))
+                }
             }
         }
 
@@ -96,32 +172,60 @@ class YabRankedClient : ClientModInitializer {
             RankedState.matchStartedAt = null
             RankedState.lastMatch = match
             RankedState.lastMatchReported = false
+            // Set synchronously so the tick guard starts re-asserting our screen
+            // this very tick — before vanilla's disconnect screen can paint. The
+            // guard claims the screen for the next several ticks.
+            RankedState.onResultLoading = true
+            resultClaimTicks = 5
 
             log.info("left ranked match ${match.matchId}; fetching result")
+
             workers.execute {
-                // the agent reports the result as the game ends; give it a moment
-                Thread.sleep(3000)
+                // The backend reports the result as the game ends; it may take
+                // a short moment to be persisted and appear in history. We poll
+                // briefly so we can show the result screen right away instead of
+                // flashing a toast and doing nothing.
                 val uuid = before?.uuid ?: return@execute
-                val updated = backend.fetchProfile(uuid)
-                val entry = backend.fetchHistory(uuid, limit = 5)
-                    .firstOrNull { it.matchId == match.matchId }
+                var updated: WireProfile? = null
+                var entry: WireHistoryEntry? = null
+                var history: List<WireHistoryEntry> = emptyList()
+
+                // Initial wait to let the agent report, then poll up to ~12s
+                // total with short intervals. Stops early as soon as entry
+                // appears. Fetch enough history to also derive the win streak.
+                val attempts = 8
+                val delayMs = 1500L
+                Thread.sleep(1500)
+                repeat(attempts) { _ ->
+                    updated = backend.fetchProfile(uuid) ?: updated
+                    history = backend.fetchHistory(uuid, limit = 20)
+                    entry = history.firstOrNull { it.matchId == match.matchId }
+                    if (entry != null) return@repeat
+                    Thread.sleep(delayMs)
+                }
 
                 client.execute {
-                    if (updated != null) {
-                        if (before != null && updated.rating != before.rating) {
-                            RankedState.lastRatingChange = updated.rating - before.rating
+                    val after = updated
+                    val e = entry
+                    RankedState.winStreak = RankedState.currentWinStreak(history)
+                    // Only replace the loading screen if the player is still on it
+                    // — they may have hit Skip, or opened another screen.
+                    val onLoading = RankedState.onResultLoading
+                    if (after != null) {
+                        if (before != null && after.rating != before.rating) {
+                            RankedState.lastRatingChange = after.rating - before.rating
                         }
-                        RankedState.profile = updated
-
-                        if (entry != null) {
-                            client.setScreenAndShow(MatchResultScreen(entry, before, updated))
-                        } else {
-                            // result not in yet — say so instead of silently doing nothing
-                            RankedToast.show(
-                                "Ranked",
-                                "Result still processing…",
-                                Ui.TEXT_DIM,
-                            )
+                        RankedState.profile = after
+                    }
+                    RankedState.onResultLoading = false
+                    when {
+                        after != null && e != null ->
+                            if (onLoading) client.setScreenAndShow(MatchResultScreen(e, before, after))
+                        else -> {
+                            // Result never landed in time: don't strand the player
+                            // on the loading screen — return to the title and note it.
+                            if (onLoading) client.setScreenAndShow(TitleScreen())
+                            RankedToast.show("Ranked", "Result still processing…", Ui.TEXT_DIM)
                         }
                     }
                 }

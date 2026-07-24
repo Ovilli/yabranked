@@ -15,6 +15,7 @@ class RankedToast(
     private val title: String,
     private val message: String,
     private val accent: Int = Ui.ACCENT,
+    private val durationMs: Long = DEFAULT_DURATION_MS,
 ) : Toast {
 
     private var visibility = Toast.Visibility.SHOW
@@ -24,7 +25,7 @@ class RankedToast(
 
     override fun update(manager: ToastManager, time: Long) {
         if (firstUpdate < 0) firstUpdate = time
-        if (time - firstUpdate >= DURATION_MS) visibility = Toast.Visibility.HIDE
+        if (time - firstUpdate >= durationMs) visibility = Toast.Visibility.HIDE
     }
 
     override fun extractRenderState(g: GuiGraphicsExtractor, font: Font, time: Long) {
@@ -38,10 +39,16 @@ class RankedToast(
     }
 
     companion object {
-        private const val DURATION_MS = 5000L
+        private const val DEFAULT_DURATION_MS = 4000L
 
-        fun show(title: String, message: String, accent: Int = Ui.ACCENT) {
-            Minecraft.getInstance().gui.toastManager().addToast(RankedToast(title, message, accent))
+        fun show(title: String, message: String, accent: Int = Ui.ACCENT, durationMs: Long = DEFAULT_DURATION_MS) {
+            Minecraft.getInstance().gui.toastManager().addToast(RankedToast(title, message, accent, durationMs))
         }
+
+        fun showInfo(title: String, message: String, durationMs: Long = DEFAULT_DURATION_MS) =
+            show(title, message, Ui.ACCENT, durationMs)
+
+        fun showError(title: String, message: String, durationMs: Long = DEFAULT_DURATION_MS) =
+            show(title, message, Ui.LOSS, durationMs)
     }
 }
