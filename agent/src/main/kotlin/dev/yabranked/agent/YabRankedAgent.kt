@@ -43,6 +43,9 @@ class YabRankedAgent : DedicatedServerModInitializer {
     /** Set when the agent decides the outcome itself (abandon/no-show). */
     private val forcedOutcome = AtomicReference<WireOutcome?>(null)
 
+    /** UUID of the player who forfeited (concede or no-show); null for a clean finish. */
+    private val forfeiter = AtomicReference<UUID?>(null)
+
     private val assignedPlayers = java.util.concurrent.ConcurrentHashMap.newKeySet<UUID>()
     private val startRequested = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -290,6 +293,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
                             val opponent =
                                 if (expected.uuid == config.playerA.uuid) config.playerB else config.playerA
                             log.warn("[yabranked] ${expected.name} forfeited; ${opponent.name} wins")
+                            forfeiter.set(expected.uuid)
                             forcedOutcome.set(
                                 if (expected.uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN
                                 else WireOutcome.TEAM_A_WIN
@@ -345,6 +349,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
                 forcedOutcome.set(WireOutcome.VOID)
             } else {
                 log.warn("[yabranked] ${leaver.name} did not return; ${opponent.name} wins by forfeit")
+                forfeiter.set(uuid)
                 forcedOutcome.set(
                     if (uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN else WireOutcome.TEAM_A_WIN
                 )
@@ -390,6 +395,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
             durationSeconds = durationSeconds,
             teamAScore = teamScore(config.playerA.uuid),
             teamBScore = teamScore(config.playerB.uuid),
+            forfeitedBy = forfeiter.get()?.toString(),
         )
         log.info("[yabranked] reporting result: $report")
 

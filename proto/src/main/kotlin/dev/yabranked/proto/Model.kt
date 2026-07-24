@@ -106,9 +106,24 @@ data class PlayerProfile(
     val season: Int = 1,
     /** 1-based leaderboard position, null until on the ladder. */
     val rank: Int? = null,
+    /** ISO 3166-1 alpha-2 country code (lowercase), null if the player set none. */
+    val country: String? = null,
+    /** Profile-card background id; "default" when unset. */
+    val background: String = "default",
+    /** Total seconds spent in counted matches this season. */
+    val playtimeSeconds: Long = 0,
+    /** Matches this player forfeited (concede or no-show) this season. */
+    val forfeits: Int = 0,
 ) {
     val isPlaced: Boolean get() = placementMatchesRemaining <= 0
 }
+
+/** Fields a player may edit on their own profile. Null means "leave unchanged". */
+@Serializable
+data class ProfileUpdate(
+    val country: String? = null,
+    val background: String? = null,
+)
 
 /** One row of a player's match history, from that player's perspective. */
 @Serializable
@@ -200,6 +215,8 @@ data class MatchResultReport(
     /** Final objective counts, for match history display. */
     val teamAScore: Int,
     val teamBScore: Int,
+    /** UUID of the player who forfeited (concede or no-show), null for a normal finish. */
+    val forfeitedBy: String? = null,
 )
 
 // --- Queue protocol (client <-> backend WebSocket) ---

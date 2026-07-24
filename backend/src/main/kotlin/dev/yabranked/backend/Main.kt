@@ -74,6 +74,20 @@ fun main(args: Array<String>) {
         seasons = SeasonService(envSeason ?: 1)
     }
 
+    // Dev fixture: a fake competitive scene so the ranked UI can be reviewed
+    // without playing real matches. In-memory only, to never touch a real DB.
+    if (System.getenv("YABRANKED_SEED") == "1") {
+        if (databaseUrl != null) {
+            log.warn("YABRANKED_SEED ignored: refusing to seed a Postgres database")
+        } else {
+            dev.yabranked.backend.dev.Seeder.seed(
+                players, matches, seasons.currentSeason,
+                selfName = System.getenv("YABRANKED_SEED_ME"),
+            )
+            log.warn("seeded in-memory stores with fixture leaderboard/match data (YABRANKED_SEED=1)")
+        }
+    }
+
     val rating = EloRatingSystem()
     val matchService = MatchService(players, matches, rating, seasons)
     val queueService = QueueService(MatchmakingQueue(), matchService)

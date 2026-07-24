@@ -4,9 +4,10 @@ import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
-import net.minecraft.client.gui.components.Button
+import dev.yabranked.client.ui.RankedButton
 import net.minecraft.client.gui.screens.ConnectScreen
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.gui.screens.TitleScreen
 import net.minecraft.client.multiplayer.ServerData
 import net.minecraft.client.multiplayer.resolver.ServerAddress
 import net.minecraft.client.resources.sounds.SimpleSoundInstance
@@ -28,11 +29,12 @@ class MatchFoundScreen(
     private var versus: WireVersusRecord? = null
     private var lastBeepSecond = -1
 
+    /** Wall-clock at first render, so the screen fades in from black. */
+    private var openedAt = 0L
+
     override fun init() {
         addRenderableWidget(
-            Button.builder(Component.literal("Join now")) { connect() }
-                .bounds(width / 2 - 100, height - 52, 200, 20)
-                .build()
+            RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Join now")) { connect() }
         )
 
         minecraft.soundManager.play(
@@ -75,7 +77,17 @@ class MatchFoundScreen(
             match.serverAddress,
             ServerData.Type.OTHER,
         )
-        ConnectScreen.startConnecting(this, Minecraft.getInstance(), address, serverData, false, null)
+        // Parent must NOT be this screen: when the match server disconnects at
+        // game end, vanilla's disconnect chain returns to the parent. If that were
+        // this MatchFoundScreen, its countdown (already ≤0) would immediately
+        // re-fire connect() against the now-dead server and strand the player on
+        // "Join now". A fresh TitleScreen is a safe fallback; the mod's own
+        // disconnect handler swaps in the result screen over it anyway.
+        ConnectScreen.startConnecting(TitleScreen(), Minecraft.getInstance(), address, serverData, false, null)
+    }
+
+    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        Ui.drawBackground(g, width, height)
     }
 
     override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
@@ -93,40 +105,50 @@ class MatchFoundScreen(
         val rightX = centerX + gap / 2
 
         if (self != null) {
-            playerCard(g, leftX, top, cardWidth, self.uuid, self.name, self.tier, self.rating, isSelf = true)
+            playerCard(g, leftX, top, cardWidth, self.uuid, self.name, self.tier, self.rating, self.country, isSelf = true)
         }
         playerCard(
             g, rightX, top, cardWidth,
             match.opponent.uuid, match.opponent.name, match.opponentTier, match.opponentRating,
+            match.opponent.country,
             isSelf = false,
         )
 
-        Ui.vsEmblem(g, centerX, top + CARD_HEIGHT / 2 - 10)
+        val emblemY = top + CARD_HEIGHT / 2 - 14
+        Ui.vsEmblem(g, centerX, emblemY, size = 28)
 
-        // rating gap tells you what kind of match to expect
-        if (self != null && match.opponentRating > 0) {
+        // rating gap tells you what kind of match to expect — suppressed if
+        // either rating is hidden, since it would leak the concealed number
+        if (self != null && match.opponentRating > 0 && !RankedState.hideElo && !RankedState.hideOpponentElo) {
             val diff = match.opponentRating - self.rating
             val line = when {
-                diff > 75 -> "§7Opponent is favoured by §c+$diff§7 MMR"
-                diff < -75 -> "§7You are favoured by §a+${-diff}§7 MMR"
-                else -> "§7Evenly matched — §f${kotlin.math.abs(diff)}§7 MMR apart"
+                diff > 75 -> "Opponent favoured by +$diff MMR"
+                diff < -75 -> "You are favoured by +${-diff} MMR"
+                else -> "Evenly matched — ${kotlin.math.abs(diff)} MMR apart"
             }
             g.centeredText(font, line, centerX, top + CARD_HEIGHT + 12, Ui.TEXT_DIM)
         }
 
         versus?.let { record ->
             val line = if (record.played == 0) {
-                "§7First time facing this opponent"
+                "First time facing this opponent"
             } else {
-                "§7Head-to-head: §a${record.wins}W §7- §c${record.losses}L" +
-                    if (record.draws > 0) " §7- §8${record.draws}D" else ""
+                "Head-to-head: ${record.wins}W · ${record.losses}L" +
+                    if (record.draws > 0) " · ${record.draws}D" else ""
             }
             g.centeredText(font, line, centerX, top + CARD_HEIGHT + 24, Ui.TEXT_DIM)
         }
 
         val seconds = maxOf(0, (ticksLeft + 19) / 20)
-        val countdown = if (connecting) "Connecting…" else "Joining in §f$seconds§7…"
-        g.centeredText(font, "§7$countdown", centerX, height - 70, Ui.WHITE)
+        val countdown = if (connecting) "Connecting…" else "Joining in $seconds…"
+        // Anchor the countdown just below the head-to-head strip rather than to
+        // the screen bottom, so it can't ride up into those lines on a short
+        // screen; keep it clear of the bottom "Join now" button either way.
+        val countdownY = minOf(top + CARD_HEIGHT + 40, height - 68)
+        g.centeredText(font, countdown, centerX, countdownY, Ui.TEXT_DIM)
+
+        if (openedAt == 0L) openedAt = System.currentTimeMillis()
+        Ui.fadeIn(g, width, height, openedAt)
     }
 
     private fun playerCard(
@@ -138,20 +160,31 @@ class MatchFoundScreen(
         name: String,
         tier: String,
         rating: Int,
+        country: String?,
         isSelf: Boolean,
     ) {
         val tierColor = Ui.tierColor(tier)
         val centerX = x + cardWidth / 2
         Ui.panel(g, x, y, cardWidth, CARD_HEIGHT)
+        // Banner behind the card, matching the profile card treatment.
+        Ui.drawUserBackground(g, x + 3, y + 3, cardWidth - 6, CARD_HEIGHT - 6, null)
         Ui.accentBar(g, x, y, CARD_HEIGHT, tierColor)
 
         g.centeredText(font, if (isSelf) "§7YOU" else "§7OPPONENT", centerX, y + 6, Ui.TEXT_FAINT)
         Ui.slot(g, centerX - HEAD / 2 - 3, y + 14, HEAD + 6)
         PlayerHeads.draw(g, centerX - HEAD / 2, y + 17, HEAD, uuid, name, tierColor)
-        g.centeredText(font, name, centerX, y + 17 + HEAD + 5, if (isSelf) Ui.ACCENT else Ui.WHITE)
+        val nameY = y + 17 + HEAD + 5
+        if (RankedState.showFlags && (!isSelf || !RankedState.hideOwnFlag)) {
+            val w = font.width(name)
+            val nameLeft = centerX - w / 2
+            Ui.flagIcon(g, nameLeft - 12, nameY, country, 9)
+        }
+        g.centeredText(font, name, centerX, nameY, if (isSelf) Ui.ACCENT else Ui.WHITE)
         Ui.rankBadge(g, centerX - 8, y + 17 + HEAD + 14, tier)
         g.centeredText(font, tier, centerX, y + 17 + HEAD + 34, tierColor)
-        g.centeredText(font, "$rating MMR", centerX, y + 17 + HEAD + 46, Ui.TEXT_DIM)
+        val hideRating = if (isSelf) RankedState.hideElo else RankedState.hideOpponentElo
+        val ratingText = if (hideRating) "§7MMR hidden" else "$rating MMR"
+        g.centeredText(font, ratingText, centerX, y + 17 + HEAD + 46, Ui.TEXT_DIM)
     }
 
     /** Escape should not strand the player outside a match that is already live. */

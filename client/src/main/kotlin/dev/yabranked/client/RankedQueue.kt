@@ -11,9 +11,18 @@ import net.minecraft.client.Minecraft
  */
 object RankedQueue {
 
-    fun join(format: String = "lockout_1v1") {
+    private const val DEBOUNCE_MS = 700L
+    @Volatile private var lastActionAt: Long = 0L
+
+    fun join(format: String = RankedState.selectedFormat.id) {
         val minecraft = Minecraft.getInstance()
-        val backend = RankedState.backend ?: return
+        val backend = RankedState.backend ?: run {
+            RankedState.queueStatus = "§cPlease sign in first"
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastActionAt < DEBOUNCE_MS) return
+        lastActionAt = now
         if (RankedState.isQueued) return
 
         RankedState.lastRatingChange = null
@@ -41,6 +50,10 @@ object RankedQueue {
     }
 
     fun leave() {
+        val now = System.currentTimeMillis()
+        if (now - lastActionAt < DEBOUNCE_MS) return
+        lastActionAt = now
+
         RankedState.queue?.leave()
         RankedState.queue = null
         RankedState.queueSnapshot = null

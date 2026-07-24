@@ -2,7 +2,7 @@ package dev.yabranked.client
 
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
-import net.minecraft.client.gui.components.Button
+import dev.yabranked.client.ui.RankedButton
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -18,14 +18,10 @@ class ForfeitConfirmScreen(
     override fun init() {
         val centerX = width / 2
         addRenderableWidget(
-            Button.builder(Component.literal("§cForfeit — $opponentName wins")) { forfeit() }
-                .bounds(centerX - 100, height / 2 + 10, 200, 20)
-                .build()
+            RankedButton(centerX - 100, height / 2 + 10, 200, 20, Component.literal("§cForfeit — $opponentName wins")) { forfeit() }
         )
         addRenderableWidget(
-            Button.builder(Component.literal("Keep playing")) { onClose() }
-                .bounds(centerX - 100, height / 2 + 34, 200, 20)
-                .build()
+            RankedButton(centerX - 100, height / 2 + 34, 200, 20, Component.literal("Keep playing")) { onClose() }
         )
     }
 
@@ -34,6 +30,10 @@ class ForfeitConfirmScreen(
         // of truth so the client cannot fake a result
         minecraft.player?.connection?.sendCommand("forfeit")
         onClose()
+    }
+
+    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        Ui.drawBackground(g, width, height, blurred = true)
     }
 
     override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
