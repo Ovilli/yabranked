@@ -3,6 +3,9 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import net.minecraft.client.gui.components.Tooltip
+import net.minecraft.client.gui.narration.NarratedElementType
+import net.minecraft.client.gui.narration.NarrationElementOutput
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -19,9 +22,21 @@ class ForfeitConfirmScreen(
         val centerX = width / 2
         addRenderableWidget(
             RankedButton(centerX - 100, height / 2 + 10, 200, 20, Component.literal("§cForfeit — $opponentName wins")) { forfeit() }
-        )
+        ).setTooltip(Tooltip.create(Component.literal("Concede the match. Counts as a loss and lowers your rating.")))
         addRenderableWidget(
             RankedButton(centerX - 100, height / 2 + 34, 200, 20, Component.literal("Keep playing")) { onClose() }
+        ).setTooltip(Tooltip.create(Component.literal("Close this and return to the match")))
+    }
+
+    /**
+     * The stakes are drawn text, and this is the one ranked screen where acting
+     * without them is unrecoverable — so the narrator gets them too.
+     */
+    override fun updateNarrationState(output: NarrationElementOutput) {
+        super.updateNarrationState(output)
+        output.add(
+            NarratedElementType.HINT,
+            "This counts as a loss and affects your rating. $opponentName will be awarded the win.",
         )
     }
 

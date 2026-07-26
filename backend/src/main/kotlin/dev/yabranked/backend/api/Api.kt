@@ -824,6 +824,7 @@ fun Application.rankedApi(deps: ApiDependencies) {
                                 position = snapshot.position,
                                 playersInQueue = snapshot.playersInQueue,
                                 waitedSeconds = snapshot.waitedSeconds,
+                                etaSeconds = snapshot.etaSeconds,
                             )
                         )
                     } else if (matched.get() == null) {

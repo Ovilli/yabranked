@@ -6,6 +6,7 @@ import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.toasts.Toast
 import net.minecraft.client.gui.components.toasts.ToastManager
+import net.minecraft.network.chat.Component
 
 /**
  * Non-blocking ranked notification (match found, tier change, report filed).
@@ -41,8 +42,23 @@ class RankedToast(
     companion object {
         private const val DEFAULT_DURATION_MS = 4000L
 
-        fun show(title: String, message: String, accent: Int = Ui.ACCENT, durationMs: Long = DEFAULT_DURATION_MS) {
-            Minecraft.getInstance().gui.toastManager().addToast(RankedToast(title, message, accent, durationMs))
+        /**
+         * @param narrate speak the toast as well as drawing it. A toast is by
+         *   definition news the player did not ask for, so it is exactly the
+         *   thing a narrator user misses; the opt-out exists for the cases where
+         *   something louder has already said the same sentence.
+         */
+        fun show(
+            title: String,
+            message: String,
+            accent: Int = Ui.ACCENT,
+            durationMs: Long = DEFAULT_DURATION_MS,
+            narrate: Boolean = true,
+        ) {
+            val minecraft = Minecraft.getInstance()
+            minecraft.gui.toastManager().addToast(RankedToast(title, message, accent, durationMs))
+            // No-op unless the player turned system narration on.
+            if (narrate) minecraft.narrator.saySystemNow(Component.literal("$title. $message"))
         }
 
         fun showInfo(title: String, message: String, durationMs: Long = DEFAULT_DURATION_MS) =

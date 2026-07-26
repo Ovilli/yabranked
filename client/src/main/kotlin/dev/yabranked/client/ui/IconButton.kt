@@ -47,7 +47,7 @@ class IconButton(
         Ui.panel(g, x, y, width, height)
         if (isHovered || isFocused) {
             // brighten the plate instead of swapping to a second sprite
-            g.fill(x + 1, y + 1, x + width - 1, y + height - 1, 0x33FFC93C)
+            g.fill(x + 1, y + 1, x + width - 1, y + height - 1, Ui.alpha(Ui.ACCENT, 0x33))
         }
 
         // scale the sprite to the button rather than assuming it fits natively

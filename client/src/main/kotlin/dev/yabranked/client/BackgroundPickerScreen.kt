@@ -87,7 +87,7 @@ class BackgroundPickerScreen(
         g.centeredText(font, Ui.fit(font, Backgrounds.label(id), w - 4), x + w / 2, y + h - 10, if (selected) Ui.ACCENT else Ui.WHITE)
         val edge = when {
             selected -> Ui.ACCENT
-            hovered -> 0x66FFFFFF
+            hovered -> Ui.alpha(Ui.WHITE, 0x66)
             else -> 0
         }
         if (edge != 0) {

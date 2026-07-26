@@ -124,10 +124,10 @@ class CountryPickerScreen(
         val w = CELL_W - 2
         val h = CELL_H - 2
         Ui.row(g, x, y, w, h)
-        if (selected) g.fill(x, y, x + w, y + h, 0x2BFFC93C)
-        if (hovered) g.fill(x, y, x + w, y + h, 0x1AFFFFFF)
+        if (selected) g.fill(x, y, x + w, y + h, Ui.SELECTION)
+        if (hovered) g.fill(x, y, x + w, y + h, Ui.HOVER)
         if (selected || hovered) {
-            val edge = if (selected) Ui.ACCENT else 0x55FFFFFF
+            val edge = if (selected) Ui.ACCENT else Ui.alpha(Ui.WHITE, 0x55)
             g.fill(x, y, x + w, y + 1, edge)
             g.fill(x, y + h - 1, x + w, y + h, edge)
             g.fill(x, y, x + 1, y + h, edge)

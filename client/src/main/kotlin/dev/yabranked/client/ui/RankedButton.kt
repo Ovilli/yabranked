@@ -54,17 +54,17 @@ class RankedButton(
         }
         wasHovered = hovered
         val body = when {
-            !active -> 0xFF262626.toInt()
-            lit -> 0xFF4A4A4A.toInt()
-            else -> 0xFF343434.toInt()
+            !active -> Ui.BUTTON_BG_DISABLED
+            lit -> Ui.BUTTON_BG_LIT
+            else -> Ui.BUTTON_BG
         }
-        val border = if (lit) Ui.ACCENT else 0xFF5A5A5A.toInt()
+        val border = if (lit) Ui.ACCENT else Ui.BUTTON_BORDER
 
         if (focused) Ui.focusRing(g, x, y, width, height)
         g.fill(x, y, x + width, y + height, border)
         g.fill(x + 1, y + 1, x + width - 1, y + height - 1, body)
         // thin top sheen to give the plate a little depth
-        g.fill(x + 1, y + 1, x + width - 1, y + 2, 0x18FFFFFF)
+        g.fill(x + 1, y + 1, x + width - 1, y + 2, Ui.alpha(Ui.WHITE, 0x18))
 
         val font = Minecraft.getInstance().font
         // §-codes in the label survive .string, so coloured labels still render;

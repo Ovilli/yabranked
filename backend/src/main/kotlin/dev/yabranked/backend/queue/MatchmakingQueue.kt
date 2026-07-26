@@ -6,6 +6,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import kotlin.math.abs
+import kotlin.math.ceil
 
 data class QueueEntry(
     val uuid: UUID,
@@ -98,6 +99,38 @@ class MatchmakingQueue(
     private fun bandOf(entry: QueueEntry, now: Instant): Int {
         val waited = Duration.between(entry.enqueuedAt, now).seconds
         return (initialBand + (waited * bandPerSecond)).toInt().coerceAtMost(maxBand)
+    }
+
+    /**
+     * Seconds until this player's soonest possible pairing, or null when no
+     * opponent can ever cover the gap (or none is queued at all).
+     *
+     * The client used to invent this number from the headcount alone, which
+     * meant it promised "any moment" to a player whose only opponent was 400
+     * rating away. This inverts [accepts]: for each candidate, how long until
+     * *both* bands reach the gap — the less-waited player is what binds.
+     */
+    fun etaSeconds(uuid: UUID): Long? {
+        val self = entries[uuid] ?: return null
+        val now = clock.instant()
+        return entries.values.asSequence()
+            .filter { it.uuid != uuid && it.format == self.format }
+            .mapNotNull { pairableIn(self, it, now) }
+            .minOrNull()
+    }
+
+    /** Seconds until [a] and [b] accept each other, or null if the cap forbids it. */
+    private fun pairableIn(a: QueueEntry, b: QueueEntry, now: Instant): Long? {
+        val gap = abs(a.rating - b.rating)
+        if (gap > maxBand) return null
+        return maxOf(waitNeeded(a, gap, now), waitNeeded(b, gap, now))
+    }
+
+    /** Seconds [entry] still has to wait for its band to reach [gap]. */
+    private fun waitNeeded(entry: QueueEntry, gap: Int, now: Instant): Long {
+        if (gap <= initialBand) return 0
+        val required = ceil((gap - initialBand) / bandPerSecond).toLong()
+        return (required - Duration.between(entry.enqueuedAt, now).seconds).coerceAtLeast(0)
     }
 
     private fun accepts(a: QueueEntry, b: QueueEntry, now: Instant): Boolean {

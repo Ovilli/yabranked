@@ -5,12 +5,37 @@ import dev.yabranked.proto.*
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import net.minecraft.client.gui.components.Tooltip
+import net.minecraft.client.gui.narration.NarratedElementType
+import net.minecraft.client.gui.narration.NarrationElementOutput
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.TitleScreen
 import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.network.chat.Component
 import net.minecraft.sounds.SoundEvents
 import org.lwjgl.glfw.GLFW
+
+/**
+ * The screen title is also its narration message, so it carries the two facts
+ * the player came for instead of the generic "Match Result" — this screen opens
+ * on its own after a disconnect, not because anyone navigated to it.
+ */
+private fun resultTitle(entry: MatchHistoryEntry): Component {
+    val outcome = when (entry.result) {
+        "win" -> "Victory"
+        "loss" -> "Defeat"
+        "draw" -> "Draw"
+        else -> "Match voided"
+    }
+    val after = entry.ratingAfter
+    val movement = if (after == null) {
+        "no rating change"
+    } else {
+        val delta = after - entry.ratingBefore
+        if (delta >= 0) "plus $delta MMR" else "minus ${-delta} MMR"
+    }
+    return Component.literal("$outcome against ${entry.opponent.name}, $movement")
+}
 
 /**
  * Shown after leaving a ranked match: the outcome, the rating movement, and a
@@ -21,7 +46,7 @@ class MatchResultScreen(
     private val entry: MatchHistoryEntry,
     private val profileBefore: PlayerProfile?,
     private val profileAfter: PlayerProfile,
-) : Screen(Component.literal("Match Result")) {
+) : Screen(resultTitle(entry)) {
 
     /** Metal-band ordinal of a tier; -1 for Unranked. Division changes within a
      *  band do not count as a promotion/demotion. */
@@ -43,22 +68,32 @@ class MatchResultScreen(
         RankedState.onResultScreen = true
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Queue again (R)"), Ui.ICON_PLAY) { queueAgain() }
-        )
+        ).setTooltip(Tooltip.create(Component.literal("Rejoin the queue and return to the ranked menu")))
         // Quick actions row above the main button
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 76, 64, 20, Component.literal("History")) { openHistory() }
-        )
+        ).setTooltip(Tooltip.create(Component.literal("Browse your recent ranked matches")))
         addRenderableWidget(
             RankedButton(width / 2 - 32, height - 76, 64, 20, Component.literal("Copy ID")) { copyMatchId() }
-        )
+        ).setTooltip(Tooltip.create(Component.literal("Copy this match's ID to the clipboard")))
         // Reporting lives here (post-match), not on the main menu: this is the
         // "player you recently played with". Hidden once the match is reported.
         addRenderableWidget(
             RankedButton(width / 2 + 36, height - 76, 64, 20, Component.literal("§cReport")) { openReport() }
-        ).apply { active = !RankedState.lastMatchReported }
+        ).apply {
+            active = !RankedState.lastMatchReported
+            setTooltip(
+                Tooltip.create(
+                    Component.literal(
+                        if (active) "Report ${entry.opponent.name} for misconduct in this match"
+                        else "You have already reported this match"
+                    )
+                )
+            )
+        }
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Done"), Ui.ICON_BACK) { onClose() }
-        )
+        ).setTooltip(Tooltip.create(Component.literal("Close and return to the title screen")))
 
         val sound = when {
             promoted -> SoundEvents.UI_TOAST_CHALLENGE_COMPLETE
@@ -161,7 +196,7 @@ class MatchResultScreen(
             g.centeredText(font, "§7MMR", centerX, top + 30, Ui.TEXT_FAINT)
             val deltaText = if (delta >= 0) "▲ +$delta" else "▼ $delta"
             val color = if (delta >= 0) Ui.WIN else Ui.LOSS
-            val bg = (0x33 shl 24) or (color and 0x00FFFFFF)
+            val bg = Ui.alpha(color, 0x33)
             Ui.chip(g, font, centerX, top + 40, deltaText, bg, Ui.WHITE)
         }
 
@@ -219,6 +254,27 @@ class MatchResultScreen(
         Ui.rankBadge(g, centerX - 12, y, after.tier, 24)
         g.centeredText(font, "§lTIER LOST", centerX, y + 28, Ui.LOSS)
         g.centeredText(font, "${before.tier} → ${after.tier}", centerX, y + 40, Ui.TEXT_DIM)
+    }
+
+    /**
+     * Tier movement, placements and the streak are drawn text with nothing
+     * focusable behind them, so they exist for the narrator only if said here.
+     */
+    override fun updateNarrationState(output: NarrationElementOutput) {
+        super.updateNarrationState(output)
+
+        val lines = buildList {
+            add("Now ${profileAfter.tier}.")
+            if (profileBefore != null && promoted) add("Tier up from ${profileBefore.tier}.")
+            if (profileBefore != null && demoted) add("Tier lost, down from ${profileBefore.tier}.")
+            if (profileAfter.placementMatchesRemaining > 0) {
+                add("${profileAfter.placementMatchesRemaining} placement matches remaining.")
+            }
+            if (entry.result == "win" && RankedState.winStreak >= 2) {
+                add("${RankedState.winStreak} win streak.")
+            }
+        }
+        output.add(NarratedElementType.HINT, lines.joinToString(" "))
     }
 
     override fun onClose() {

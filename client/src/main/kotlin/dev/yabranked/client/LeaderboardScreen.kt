@@ -19,8 +19,7 @@ class LeaderboardScreen(
     private val parent: Screen?,
 ) : Screen(Component.literal("Leaderboard")) {
 
-    private var entries: List<PlayerProfile>? = null
-    private var error: String? = null
+    private var entries: Loadable<List<PlayerProfile>> = Loadable.Loading
 
     // Season being viewed; -1 until resolved from the backend / profile.
     private var season: Int = RankedState.profile?.season ?: -1
@@ -62,7 +61,7 @@ class LeaderboardScreen(
      *  the backend order) so the position number and podium medals stay meaningful
      *  even when the list is re-sorted or filtered. */
     private fun rows(): List<Pair<Int, PlayerProfile>> {
-        val list = entries ?: return emptyList()
+        val list = entries.valueOrNull ?: return emptyList()
         val q = search?.value?.trim().orEmpty()
         val tier = tierFilter()
         val base = list.mapIndexed { i, p -> (i + 1) to p }
@@ -148,7 +147,7 @@ class LeaderboardScreen(
 
         val backend = RankedState.backend
         if (backend == null) {
-            error = "Not signed in"
+            entries = Loadable.Failed("Not signed in")
             return
         }
         // A window resize re-runs init() on this same instance; the ladder we
@@ -162,7 +161,6 @@ class LeaderboardScreen(
         val target = (season + delta).coerceIn(1, if (currentSeason > 0) currentSeason else season + delta)
         if (target == season) return
         season = target
-        entries = null
         scroll = 0
         RankedState.backend?.let { load(it) }
         updateNavState()
@@ -178,7 +176,7 @@ class LeaderboardScreen(
     private fun load(backend: BackendClient) {
         val minecraft = this.minecraft
         val id = ++loadId
-        error = null
+        entries = Loadable.Loading
         val requested = season
         val knownCurrent = currentSeason
         YabRankedClient.workers.execute {
@@ -190,15 +188,7 @@ class LeaderboardScreen(
                 if (id != loadId) return@execute
                 currentSeason = current
                 season = target
-                when (fetched) {
-                    is BackendClient.Fetch.Ok -> {
-                        entries = fetched.value
-                        if (fetched.value.isEmpty()) error = "No rated players in season $target"
-                    }
-                    // Offline, an expired session and an outdated mod each need a
-                    // different move from the player, so name the one that hit.
-                    is BackendClient.Fetch.Error -> error = fetched.message
-                }
+                entries = fetched.toLoadable()
                 updateNavState()
             }
         }
@@ -227,13 +217,13 @@ class LeaderboardScreen(
         g.centeredText(font, "§7$seasonText$suffix", centerX, height - 46, Ui.TEXT_DIM)
 
         val left = centerX - WIDTH / 2
-        val list = entries
 
         // magnifier in front of the search box
         Ui.icon(g, Ui.ICON_SEARCH, left + 2, 38, 10, Ui.TEXT_DIM)
 
-        if (list == null || error != null) {
-            Ui.messageCard(g, font, centerX, 66, error ?: "Loading…")
+        val placeholder = entries.placeholder("No rated players in season $season")
+        if (placeholder != null) {
+            Ui.messageCard(g, font, centerX, 66, placeholder)
             Ui.fadeIn(g, width, height, openedAt)
             return
         }
@@ -303,9 +293,9 @@ class LeaderboardScreen(
 
         // the viewer's own row is highlighted so it is findable at a glance
         Ui.row(g, left, y, WIDTH, ROW_HEIGHT - 1)
-        if (isSelf) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, 0x2BFFC93C)
+        if (isSelf) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, Ui.SELECTION)
         // hover feedback signals the row is clickable (opens the player profile)
-        if (hovered) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, 0x1AFFFFFF)
+        if (hovered) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, Ui.HOVER)
         Ui.accentBar(g, left, y, ROW_HEIGHT - 1, tierColor)
 
         val textY = y + 4

@@ -310,6 +310,13 @@ sealed interface QueueServerMessage {
          * an unknown field is ignored.
          */
         val preparingMatch: Boolean = false,
+        /**
+         * Seconds until the soonest pairing the matchmaker's current bands
+         * allow, or null when it cannot be derived (nobody in range queued).
+         * The client used to guess this from the headcount and would happily
+         * say "any moment" to someone no queued opponent could match.
+         */
+        val etaSeconds: Long? = null,
     ) : QueueServerMessage
 
     @Serializable

@@ -21,12 +21,11 @@ class PlayerProfileScreen(
     private val name: String,
 ) : Screen(Component.literal("Player Profile")) {
 
-    private var profile: PlayerProfile? = null
+    private var profile: Loadable<PlayerProfile> = Loadable.Loading
     private var points: List<Ui.ChartPoint> = emptyList()
     private var history: List<MatchHistoryEntry> = emptyList()
     private var versus: VersusRecord? = null
     private var achievements: List<Achievement> = emptyList()
-    private var error: String? = null
 
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
@@ -45,7 +44,7 @@ class PlayerProfileScreen(
 
         val backend = RankedState.backend
         if (backend == null) {
-            error = "Not signed in"
+            profile = Loadable.Failed("Not signed in")
             return
         }
         // Load once per screen, not once per resize: init() re-runs on every
@@ -69,12 +68,7 @@ class PlayerProfileScreen(
                         .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
                         .reversed()
                     versus = h2h
-                    when (fetched) {
-                        is BackendClient.Fetch.Ok -> profile = fetched.value
-                        // Name the actual fault: "could not load X" told the
-                        // player nothing about whether retrying would help.
-                        is BackendClient.Fetch.Error -> error = fetched.message
-                    }
+                    profile = fetched.toLoadable()
                 }
             }
         }
@@ -92,11 +86,13 @@ class PlayerProfileScreen(
         Ui.header(g, centerX - 110, 10, 220, 24)
         g.centeredText(font, "§lPLAYER PROFILE", centerX, 17, Ui.ACCENT)
 
-        val p = profile
-        if (p == null) {
-            Ui.messageCard(g, font, centerX, 66, error ?: "Loading…")
-            Ui.fadeIn(g, width, height, openedAt)
-            return
+        val p = when (val state = profile) {
+            is Loadable.Loaded -> state.value
+            is Loadable.Pending -> {
+                Ui.messageCard(g, font, centerX, 66, state.message)
+                Ui.fadeIn(g, width, height, openedAt)
+                return
+            }
         }
 
         drawCard(g, centerX, p)
