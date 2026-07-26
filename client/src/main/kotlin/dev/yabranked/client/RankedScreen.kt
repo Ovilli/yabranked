@@ -316,7 +316,7 @@ class RankedScreen(
         Ui.slot(g, padLeft - 2, CARD_TOP + 8, 28)
         Ui.slot(g, padRight - 30, CARD_TOP + 8, 30)
 
-        val sk = 0xFF2A2A2A.toInt()
+        val sk = Ui.SKELETON
         val y0 = CARD_TOP + 8
         // header column skeleton, matching the real card's 12px grid
         g.fill(padLeft + 32, y0, padRight - 40, y0 + 6, sk)        // name
@@ -325,7 +325,7 @@ class RankedScreen(
         g.fill(padLeft + 32, y0 + 36, padRight - 120, y0 + 42, sk) // secondary
         // record + bar placeholders
         g.fill(padLeft, CARD_TOP + 62, padLeft + 80, CARD_TOP + 68, sk)
-        g.fill(padLeft, CARD_TOP + 74, padRight, CARD_TOP + 77, 0xFF1C1C1C.toInt())
+        g.fill(padLeft, CARD_TOP + 74, padRight, CARD_TOP + 77, Ui.TRACK)
 
         g.centeredText(font, "Loading…", centerX, CARD_TOP + CARD_HEIGHT + 12, Ui.TEXT_DIM)
     }
@@ -349,14 +349,10 @@ class RankedScreen(
                 return
             }
             g.centeredText(font, "Searching for an opponent$dots", centerX, y, Ui.ACCENT)
-            // Rough ETA: with someone else already queued a match is imminent;
-            // otherwise the MMR band widens with wait time, so the estimate
-            // counts down as you wait.
-            val eta = if (snapshot.playersInQueue >= 2) "~any moment"
-                else "~${maxOf(5L, 45L - snapshot.waitedSeconds)}s"
             g.centeredText(
                 font,
-                "§7${Ui.duration(snapshot.waitedSeconds)} elapsed · ${snapshot.playersInQueue} in queue · est. $eta",
+                "§7${Ui.duration(snapshot.waitedSeconds)} elapsed · ${snapshot.playersInQueue} in queue" +
+                    etaSuffix(snapshot.etaSeconds),
                 centerX, y + 12, Ui.TEXT_DIM,
             )
             return
@@ -365,6 +361,22 @@ class RankedScreen(
         (RankedState.queueStatus ?: RankedState.statusMessage)?.let { status ->
             g.centeredText(font, status, centerX, y, Ui.WHITE)
         }
+    }
+
+    /**
+     * The " · est. …" tail of the searching line, or nothing at all.
+     *
+     * The estimate is the backend's — derived from how long the matchmaker's
+     * MMR bands still need to widen to cover the nearest queued opponent. This
+     * used to be guessed client-side from the headcount, which cheerfully
+     * promised "any moment" to a player nobody in the queue could be matched
+     * with. When the server cannot name a time (nobody in range) we say
+     * nothing rather than invent one.
+     */
+    private fun etaSuffix(etaSeconds: Long?): String = when {
+        etaSeconds == null -> ""
+        etaSeconds <= 5 -> " · est. any moment"
+        else -> " · est. ~${Ui.duration(etaSeconds)}"
     }
 
     private fun drawDisabledHints(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {

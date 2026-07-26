@@ -7,6 +7,9 @@ import dev.yabranked.client.ui.Ui
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import net.minecraft.client.gui.components.Tooltip
+import net.minecraft.client.gui.narration.NarratedElementType
+import net.minecraft.client.gui.narration.NarrationElementOutput
 import net.minecraft.client.gui.screens.ConnectScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.TitleScreen
@@ -24,7 +27,9 @@ import net.minecraft.sounds.SoundEvents
 class MatchFoundScreen(
     private val parent: Screen?,
     private val match: QueueServerMessage.MatchFound,
-) : Screen(Component.literal("Match Found")) {
+    // The title is also the narration message, so it names the opponent rather
+    // than saying "Match Found" to someone who cannot see who they drew.
+) : Screen(Component.literal("Match found against ${match.opponent.name}")) {
 
     private var ticksLeft = COUNTDOWN_TICKS
     private var connecting = false
@@ -37,12 +42,14 @@ class MatchFoundScreen(
     override fun init() {
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Join now")) { connect() }
-        )
+        ).setTooltip(Tooltip.create(Component.literal("Skip the countdown and connect to the match server now")))
 
         minecraft.soundManager.play(
             SimpleSoundInstance.forUI(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, 1.0f)
         )
-        RankedToast.show("Match found", "vs ${match.opponent.name} · ${match.opponentTier}")
+        // Silent toast: RankedQueue already narrated the match the moment it
+        // arrived, which is earlier and says the same thing.
+        RankedToast.show("Match found", "vs ${match.opponent.name} · ${match.opponentTier}", narrate = false)
 
         val backend = RankedState.backend
         val self = RankedState.profile
@@ -190,6 +197,30 @@ class MatchFoundScreen(
         val hideRating = if (isSelf) RankedState.hideElo else (RankedState.hideOpponentElo || rating <= 0)
         val ratingText = if (hideRating) "§7MMR hidden" else "$rating MMR"
         g.centeredText(font, ratingText, centerX, y + 17 + HEAD + 46, Ui.TEXT_DIM)
+    }
+
+    /**
+     * The whole reveal is drawn text with no widget behind it, so the narrator
+     * would otherwise get the title and a lone "Join now" button.
+     */
+    override fun updateNarrationState(output: NarrationElementOutput) {
+        super.updateNarrationState(output)
+
+        // Mirrors the cards, including the redactions: a hidden rating must stay
+        // hidden when it is spoken rather than drawn.
+        val rating = if (RankedState.hideOpponentElo || match.opponentRating <= 0) {
+            "MMR hidden"
+        } else {
+            "${match.opponentRating} MMR"
+        }
+        val head = versus?.let { record ->
+            if (record.played == 0) " First time facing this opponent."
+            else " Head to head, ${record.wins} wins, ${record.losses} losses, ${record.draws} draws."
+        } ?: ""
+        output.add(
+            NarratedElementType.HINT,
+            "Opponent rank ${match.opponentTier}, $rating.$head Connecting automatically when the countdown ends.",
+        )
     }
 
     /** Escape should not strand the player outside a match that is already live. */

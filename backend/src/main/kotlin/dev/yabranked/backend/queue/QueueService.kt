@@ -29,6 +29,13 @@ data class QueueSnapshot(
      */
     val playersInQueue: Int,
     val waitedSeconds: Long,
+    /**
+     * Seconds until the soonest pairing this player's queue actually allows,
+     * or null when nobody in range is waiting. Computed from the same band
+     * expansion the tick uses, so it cannot promise a match the matchmaker
+     * would refuse.
+     */
+    val etaSeconds: Long?,
 )
 
 /**
@@ -110,6 +117,7 @@ class QueueService(
             position = queue.positionOf(uuid),
             playersInQueue = queue.sizeOf(format),
             waitedSeconds = queue.waitedSeconds(uuid),
+            etaSeconds = queue.etaSeconds(uuid),
         )
     }
 

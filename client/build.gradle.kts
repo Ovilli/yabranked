@@ -53,6 +53,22 @@ dependencies {
     // shared wire model — compile against it and bundle its classes (see above)
     implementation(project(":proto"))
     bundledProto(project(":proto"))
+
+    testImplementation(kotlin("test"))
+}
+
+// Plain JVM unit tests for the mod's non-rendering logic — no game harness.
+// Loom already puts the Minecraft jar on the test classpath, so classes that
+// merely *mention* net.minecraft types (Ui, QueueBadge) load fine; anything
+// that actually constructs a Screen or calls Minecraft.getInstance() does not,
+// and belongs behind an extracted, MC-free helper instead.
+tasks.test {
+    useJUnitPlatform()
+    // Minecraft's log4j config rides in on that classpath and opens
+    // logs/latest.log relative to the working directory — which is the module
+    // root, so running tests would litter client/logs/. Keep it under build/.
+    workingDir = layout.buildDirectory.dir("test-work").get().asFile
+    doFirst { workingDir.mkdirs() }
 }
 
 tasks.named<Jar>("jar") {

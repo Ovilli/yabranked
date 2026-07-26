@@ -18,8 +18,7 @@ class MatchHistoryScreen(
     private val parent: Screen?,
 ) : Screen(Component.literal("Match History")) {
 
-    private var entries: List<MatchHistoryEntry>? = null
-    private var error: String? = null
+    private var entries: Loadable<List<MatchHistoryEntry>> = Loadable.Loading
 
     /** Y of the first row, set during render so click hit-testing matches it
      *  (it shifts down when the trend chart is shown). */
@@ -68,7 +67,7 @@ class MatchHistoryScreen(
         val backend = RankedState.backend
         val profile = RankedState.profile
         if (backend == null || profile == null) {
-            error = "Not signed in"
+            entries = Loadable.Failed("Not signed in")
             return
         }
         // Once per screen, not once per resize — see PlayerProfileScreen.
@@ -77,16 +76,9 @@ class MatchHistoryScreen(
             YabRankedClient.workers.execute {
                 val fetched = backend.fetchHistory(profile.uuid, limit = 50)
                 minecraft.execute {
-                    when (fetched) {
-                        is BackendClient.Fetch.Ok -> {
-                            entries = fetched.value
-                            RankedState.winStreak = RankedState.currentWinStreak(fetched.value)
-                            if (fetched.value.isEmpty()) error = "Play a ranked match to see your history"
-                        }
-                        // "why" matters here: offline, expired session and an
-                        // outdated mod each need a different move from the player.
-                        is BackendClient.Fetch.Error -> error = fetched.message
-                    }
+                    entries = fetched.toLoadable()
+                    // A failed read leaves the streak alone rather than zeroing it.
+                    entries.valueOrNull?.let { RankedState.winStreak = RankedState.currentWinStreak(it) }
                 }
             }
         }
@@ -116,17 +108,16 @@ class MatchHistoryScreen(
         // disappears while loading or on an error card.
         Ui.icon(g, Ui.ICON_SEARCH, left + 2, 50, 10, Ui.TEXT_DIM)
 
-        val list = entries
-        if (error != null) {
-            Ui.messageCard(g, font, centerX, 74, error!!)
+        val placeholder = entries.placeholder("Play a ranked match to see your history")
+        if (placeholder != null) {
+            // A first load gets row-shaped stubs instead of a line of text, so the
+            // list's shape is on screen before its content is.
+            if (entries is Loadable.Loading) drawLoadingSkeleton(g, centerX)
+            else Ui.messageCard(g, font, centerX, 74, placeholder)
             Ui.fadeIn(g, width, height, openedAt)
             return
         }
-        if (list == null) {
-            drawLoadingSkeleton(g, centerX)
-            Ui.fadeIn(g, width, height, openedAt)
-            return
-        }
+        val list = entries.valueOrNull.orEmpty()
 
         // record summary across the fetched window, clear of the header plate
         val wins = list.count { it.result == "win" }
@@ -177,7 +168,7 @@ class MatchHistoryScreen(
 
     override fun keyPressed(event: KeyEvent): Boolean {
         if (search?.isFocused == true) return super.keyPressed(event)
-        val shown = entries?.let { filtered(it) } ?: return super.keyPressed(event)
+        val shown = filtered(entries.valueOrNull ?: return super.keyPressed(event))
         when (event.key()) {
             GLFW.GLFW_KEY_DOWN -> {
                 if (shown.isNotEmpty()) { selected = (selected + 1).coerceIn(0, shown.size - 1); ensureVisible() }
@@ -200,7 +191,7 @@ class MatchHistoryScreen(
 
     private fun drawLoadingSkeleton(g: GuiGraphicsExtractor, centerX: Int) {
         val left = centerX - WIDTH / 2
-        val sk = 0xFF2A2A2A.toInt()
+        val sk = Ui.SKELETON
         // Draw a few placeholder rows
         for (i in 0 until 5) {
             val y = TOP + i * ROW_HEIGHT
@@ -220,7 +211,7 @@ class MatchHistoryScreen(
 
         Ui.row(g, left, y, WIDTH, ROW_HEIGHT - 1)
         // hover feedback signals the row is clickable (opens the opponent profile)
-        if (hovered) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, 0x1AFFFFFF)
+        if (hovered) g.fill(left + 2, y + 1, left + WIDTH - 2, y + ROW_HEIGHT - 2, Ui.HOVER)
         Ui.accentBar(g, left, y, ROW_HEIGHT - 1, color)
 
         val textY = y + 4
@@ -259,7 +250,7 @@ class MatchHistoryScreen(
     override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
         if (super.mouseClicked(event, doubleClick)) return true
         if (event.button() != 0) return false
-        val shown = entries?.let { filtered(it) } ?: return false
+        val shown = filtered(entries.valueOrNull ?: return false)
 
         val left = width / 2 - WIDTH / 2
         val mouseX = event.x()
@@ -268,7 +259,7 @@ class MatchHistoryScreen(
 
         // Click the trend chart to open the full-screen version.
         val searching = !search?.value?.trim().isNullOrEmpty()
-        val points = entries?.let { chartPoints(it) }.orEmpty()
+        val points = chartPoints(entries.valueOrNull.orEmpty())
         if (!searching && points.size >= 2 &&
             mouseY >= CHART_TOP && mouseY < CHART_TOP + CHART_HEIGHT
         ) {

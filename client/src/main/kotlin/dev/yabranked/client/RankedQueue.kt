@@ -3,6 +3,7 @@ package dev.yabranked.client
 import dev.yabranked.proto.*
 
 import net.minecraft.client.Minecraft
+import net.minecraft.network.chat.Component
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
@@ -47,6 +48,25 @@ object RankedQueue {
      *  socket the player has already abandoned cannot touch current state. */
     private var generation = 0
 
+    /** Which queue transitions the narrator has already spoken on the current
+     *  connection. QueueState lands once a second and every tick sounds the
+     *  same, so only the edges are worth saying out loud. */
+    private var narratedSearching = false
+    private var narratedPreparing = false
+
+    /**
+     * Speak a queue transition.
+     *
+     * This is the half of the mod with no screen behind it: the player closed
+     * the ranked menu and walked off, so the socket is the only thing that can
+     * tell them anything. [net.minecraft.client.GameNarrator.saySystemNow] is a
+     * no-op unless the player asked for system narration, so this never forces
+     * speech on anyone who turned the narrator off.
+     */
+    private fun narrate(text: String) {
+        Minecraft.getInstance().narrator.saySystemNow(Component.literal(text))
+    }
+
     fun join(format: MatchFormat = RankedState.selectedFormat) {
         if (RankedState.backend == null) {
             RankedState.queueStatus = "§cPlease sign in first"
@@ -61,6 +81,8 @@ object RankedQueue {
         RankedState.queueStatus = "Joining queue…"
         wanted = format
         reconnects = 0
+        narratedSearching = false
+        narratedPreparing = false
         connect(++generation, format)
     }
 
@@ -125,8 +147,16 @@ object RankedQueue {
             wanted = null
             RankedState.queueReconnecting = false
             RankedState.queueStatus = "§cLost the queue connection — try again"
+            narrate("Lost the queue connection. You are no longer queued.")
             return
         }
+
+        // Only the first attempt speaks — the retries are the same news. Arming
+        // the searching flag again means the QueueState that ends the outage
+        // tells the player they are back in, which is the half that matters.
+        if (reconnects == 0) narrate("Queue connection lost. Reconnecting.")
+        narratedSearching = false
+        narratedPreparing = false
 
         val delay = (RECONNECT_BASE_MS shl reconnects).coerceAtMost(RECONNECT_MAX_MS)
         reconnects++
@@ -159,11 +189,24 @@ object RankedQueue {
             is QueueServerMessage.QueueState -> {
                 RankedState.queueSnapshot = message
                 RankedState.queueStatus = null
+                // Position and headcount churn every tick and none of it is
+                // worth a second of speech; the two state changes underneath
+                // them are, and each is spoken once.
+                if (message.preparingMatch) {
+                    if (!narratedPreparing) {
+                        narratedPreparing = true
+                        narrate("Opponent found. Preparing the match server.")
+                    }
+                } else if (!narratedSearching) {
+                    narratedSearching = true
+                    narrate("In queue. Searching for an opponent.")
+                }
             }
 
             is QueueServerMessage.QueueError -> {
                 RankedState.queueSnapshot = null
                 RankedState.queueStatus = "§c${message.message}"
+                narrate("Queue error. ${message.message}")
             }
 
             is QueueServerMessage.MatchFound -> {
@@ -177,6 +220,11 @@ object RankedQueue {
                 RankedState.queue = null
                 RankedState.queueSnapshot = null
                 RankedState.queueStatus = null
+
+                // Said before the screen opens rather than left to the screen's
+                // own (delayed) narration: the countdown is five seconds and the
+                // player may well be looking at something else entirely.
+                narrate("Match found against ${message.opponent.name}. Connecting shortly.")
 
                 // takes over from whatever screen the player is on, including
                 // none; the countdown owns the transition so there is no parent

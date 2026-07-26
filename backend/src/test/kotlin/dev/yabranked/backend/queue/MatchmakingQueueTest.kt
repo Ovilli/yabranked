@@ -106,6 +106,67 @@ class MatchmakingQueueTest {
     }
 
     @Test
+    fun `eta is zero when the initial band already covers the gap`() {
+        val a = player()
+        queue.enqueue(a, 1000, MatchFormat.LOCKOUT_1V1)
+        queue.enqueue(player(), 1080, MatchFormat.LOCKOUT_1V1)
+
+        assertEquals(0L, queue.etaSeconds(a))
+    }
+
+    @Test
+    fun `eta counts the seconds of band expansion the gap still needs`() {
+        val a = player()
+        queue.enqueue(a, 1000, MatchFormat.LOCKOUT_1V1)
+        queue.enqueue(player(), 1300, MatchFormat.LOCKOUT_1V1)
+
+        // gap 300, initial band 100, 5/s -> 40s before either band reaches it
+        assertEquals(40L, queue.etaSeconds(a))
+        clock.advance(Duration.ofSeconds(25))
+        assertEquals(15L, queue.etaSeconds(a))
+    }
+
+    @Test
+    fun `eta is bound by the player who has waited less`() {
+        val early = player()
+        queue.enqueue(early, 1000, MatchFormat.LOCKOUT_1V1)
+        clock.advance(Duration.ofSeconds(40))
+        val late = player()
+        queue.enqueue(late, 1300, MatchFormat.LOCKOUT_1V1)
+
+        // early's band already covers the 300 gap; late still needs the full 40s
+        assertEquals(40L, queue.etaSeconds(early))
+        assertEquals(40L, queue.etaSeconds(late))
+    }
+
+    @Test
+    fun `eta picks the soonest of several candidates`() {
+        val a = player()
+        queue.enqueue(a, 1000, MatchFormat.LOCKOUT_1V1)
+        queue.enqueue(player(), 1500, MatchFormat.LOCKOUT_1V1) // 80s
+        queue.enqueue(player(), 1200, MatchFormat.LOCKOUT_1V1) // 20s
+
+        assertEquals(20L, queue.etaSeconds(a))
+    }
+
+    @Test
+    fun `eta is null when no opponent can ever be reached`() {
+        val alone = player()
+        queue.enqueue(alone, 1000, MatchFormat.LOCKOUT_1V1)
+        assertEquals(null, queue.etaSeconds(alone), "nobody else queued")
+
+        // beyond maxBand, and in another format — neither is ever pairable
+        queue.enqueue(player(), 3000, MatchFormat.LOCKOUT_1V1)
+        queue.enqueue(player(), 1000, MatchFormat.CASUAL_LOCKOUT)
+        assertEquals(null, queue.etaSeconds(alone))
+    }
+
+    @Test
+    fun `eta is null for a player who is not queued`() {
+        assertEquals(null, queue.etaSeconds(player()))
+    }
+
+    @Test
     fun `four players produce two matches`() {
         repeat(4) { i ->
             queue.enqueue(player(), 1000 + i * 10, MatchFormat.LOCKOUT_1V1)
