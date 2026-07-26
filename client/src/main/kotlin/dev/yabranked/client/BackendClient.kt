@@ -1,5 +1,7 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
@@ -34,11 +36,11 @@ class BackendClient(
         .connectTimeout(Duration.ofSeconds(10))
         .build()
 
-    var session: WireSessionResponse? = null
+    var session: SessionResponse? = null
         private set
 
     sealed interface AuthResult {
-        data class Ok(val session: WireSessionResponse) : AuthResult
+        data class Ok(val session: SessionResponse) : AuthResult
         data class Outdated(val message: String) : AuthResult
         data class Failed(val message: String) : AuthResult
     }
@@ -62,8 +64,8 @@ class BackendClient(
         }
 
         val body = json.encodeToString(
-            WireSessionRequest.serializer(),
-            WireSessionRequest(username, serverId, clientVersion),
+            SessionRequest.serializer(),
+            SessionRequest(username, serverId, clientVersion),
         )
         val request = HttpRequest.newBuilder()
             .uri(URI.create("$baseUrl/v1/auth/session"))
@@ -78,7 +80,7 @@ class BackendClient(
                 response.statusCode() == 426 ->
                     AuthResult.Outdated("Ranked mod update required")
                 response.statusCode() in 200..299 -> {
-                    val parsed = json.decodeFromString(WireSessionResponse.serializer(), response.body())
+                    val parsed = json.decodeFromString(SessionResponse.serializer(), response.body())
                     session = parsed
                     AuthResult.Ok(parsed)
                 }
@@ -93,63 +95,111 @@ class BackendClient(
         }
     }
 
-    fun fetchProfile(uuid: String): WireProfile? = try {
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl/v1/players/$uuid"))
-            .timeout(Duration.ofSeconds(10))
-            .GET()
-            .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() == 200) {
-            json.decodeFromString(WireProfile.serializer(), response.body())
-        } else null
-    } catch (e: Exception) {
-        log.warn("profile fetch failed", e)
-        null
+    /**
+     * Outcome of a backend read.
+     *
+     * Screens have to tell the failures apart — "the backend is down", "your
+     * session is gone" and "your mod is too old" each need a different line and
+     * a different next step from the player. Collapsing them all into null left
+     * every screen able to say nothing better than "could not load".
+     */
+    sealed interface Fetch<out T> {
+        data class Ok<out T>(val value: T) : Fetch<T>
+
+        /** Any failure, carrying the line a screen should show for it. */
+        sealed interface Error : Fetch<Nothing> {
+            val message: String
+        }
+
+        /** The backend was never reached: refused, timed out, no DNS. */
+        data object Offline : Error {
+            override val message = "Ranked backend unreachable"
+        }
+
+        /** 401/403 — the bearer token expired or was revoked. */
+        data object Unauthorized : Error {
+            override val message = "Session expired — sign in again"
+        }
+
+        /** 426 — the backend's clientVersion gate rejected this build. */
+        data object Outdated : Error {
+            override val message = "Ranked mod update required"
+        }
+
+        /** Anything else the backend answered, including an undecodable body. */
+        data class Failed(val status: Int) : Error {
+            override val message = "Request failed ($status)"
+        }
     }
 
-    fun fetchHistory(uuid: String, limit: Int = 10): List<WireHistoryEntry> = try {
+    /**
+     * One unauthenticated GET, decoded by [decode]. Every read below is this
+     * same request with a different path, so the status → [Fetch] mapping is
+     * written once instead of once per endpoint.
+     */
+    private fun <T> get(path: String, decode: (String) -> T): Fetch<T> {
         val request = HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl/v1/players/$uuid/matches?limit=$limit"))
+            .uri(URI.create("$baseUrl$path"))
             .timeout(Duration.ofSeconds(10))
             .GET()
             .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() == 200) {
-            json.decodeFromString(response.body())
-        } else emptyList()
-    } catch (e: Exception) {
-        log.warn("history fetch failed", e)
-        emptyList()
+        val response = try {
+            http.send(request, HttpResponse.BodyHandlers.ofString())
+        } catch (e: Exception) {
+            log.warn("GET $path failed", e)
+            return Fetch.Offline
+        }
+        val status = response.statusCode()
+        return when {
+            status == 401 || status == 403 -> Fetch.Unauthorized
+            status == 426 -> Fetch.Outdated
+            status in 200..299 -> try {
+                Fetch.Ok(decode(response.body()))
+            } catch (e: Exception) {
+                // A body we cannot read is a backend fault, not a dead network.
+                log.warn("GET $path: undecodable body", e)
+                Fetch.Failed(status)
+            }
+            else -> {
+                log.warn("GET $path: $status")
+                Fetch.Failed(status)
+            }
+        }
     }
 
-    /** Head-to-head record of [self] against [opponent]. */
-    fun fetchVersus(self: String, opponent: String): WireVersusRecord? = try {
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl/v1/players/$self/versus/$opponent"))
-            .timeout(Duration.ofSeconds(10))
-            .GET()
-            .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() == 200) {
-            json.decodeFromString(WireVersusRecord.serializer(), response.body())
-        } else null
-    } catch (e: Exception) {
-        log.warn("versus fetch failed", e)
-        null
-    }
+    fun fetchProfile(uuid: String): Fetch<PlayerProfile> =
+        get("/v1/players/$uuid") { json.decodeFromString(PlayerProfile.serializer(), it) }
+
+    fun fetchHistory(uuid: String, limit: Int = 10): Fetch<List<MatchHistoryEntry>> =
+        get("/v1/players/$uuid/matches?limit=$limit") { json.decodeFromString(it) }
+
+    /** Unlocked achievements for [uuid], oldest first; empty on any failure —
+     *  the achievement strip is an embellishment, not a screen's content. */
+    fun fetchAchievements(uuid: String): List<Achievement> =
+        get<List<Achievement>>("/v1/players/$uuid/achievements") { json.decodeFromString(it) }
+            .orElse(emptyList())
+
+    /** Head-to-head record of [self] against [opponent]; null when unavailable. */
+    fun fetchVersus(self: String, opponent: String): VersusRecord? =
+        get("/v1/players/$self/versus/$opponent") { json.decodeFromString(VersusRecord.serializer(), it) }
+            .orElse(null)
 
     /**
      * Update your own profile. [country] is a 2-letter code, "" to clear the
      * flag, or null to leave unchanged. Returns the refreshed profile, or null
      * on failure. Also refreshes the cached [session] profile on success.
      */
-    fun updateProfile(country: String? = null, background: String? = null): WireProfile? {
+    fun updateProfile(
+        country: String? = null,
+        background: String? = null,
+        hideFlag: Boolean? = null,
+        hideRating: Boolean? = null,
+    ): PlayerProfile? {
         val token = session?.token ?: return null
         return try {
             val body = json.encodeToString(
-                WireProfileUpdate.serializer(),
-                WireProfileUpdate(country, background),
+                ProfileUpdate.serializer(),
+                ProfileUpdate(country, background, hideFlag, hideRating),
             )
             val request = HttpRequest.newBuilder()
                 .uri(URI.create("$baseUrl/v1/players/me"))
@@ -160,7 +210,7 @@ class BackendClient(
                 .build()
             val response = http.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() in 200..299) {
-                val profile = json.decodeFromString(WireProfile.serializer(), response.body())
+                val profile = json.decodeFromString(PlayerProfile.serializer(), response.body())
                 session = session?.copy(profile = profile)
                 profile
             } else {
@@ -177,7 +227,7 @@ class BackendClient(
     fun submitReport(matchId: String, reason: String): String {
         val token = session?.token ?: return "Not logged in"
         return try {
-            val body = json.encodeToString(WireReportRequest.serializer(), WireReportRequest(matchId, reason))
+            val body = json.encodeToString(ReportRequest.serializer(), ReportRequest(matchId, reason))
             val request = HttpRequest.newBuilder()
                 .uri(URI.create("$baseUrl/v1/reports"))
                 .header("Authorization", "Bearer $token")
@@ -196,39 +246,16 @@ class BackendClient(
         }
     }
 
-    fun fetchLeaderboard(limit: Int = 25, season: Int? = null): List<WireProfile> = try {
+    fun fetchLeaderboard(limit: Int = 25, season: Int? = null): Fetch<List<PlayerProfile>> {
         val seasonParam = season?.let { "&season=$it" } ?: ""
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl/v1/leaderboard?limit=$limit$seasonParam"))
-            .timeout(Duration.ofSeconds(10))
-            .GET()
-            .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() == 200) {
-            json.decodeFromString(response.body())
-        } else emptyList()
-    } catch (e: Exception) {
-        log.warn("leaderboard fetch failed", e)
-        emptyList()
+        return get("/v1/leaderboard?limit=$limit$seasonParam") { json.decodeFromString(it) }
     }
 
     /** Current season number; falls back to 1 when the call fails. */
-    fun fetchCurrentSeason(): Int = try {
-        val request = HttpRequest.newBuilder()
-            .uri(URI.create("$baseUrl/v1/seasons/current"))
-            .timeout(Duration.ofSeconds(10))
-            .GET()
-            .build()
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-        if (response.statusCode() == 200) {
-            json.parseToJsonElement(response.body()).let {
-                it.jsonObject["season"]?.jsonPrimitive?.int ?: 1
-            }
-        } else 1
-    } catch (e: Exception) {
-        log.warn("season fetch failed", e)
-        1
-    }
+    fun fetchCurrentSeason(): Int =
+        get("/v1/seasons/current") {
+            json.parseToJsonElement(it).jsonObject["season"]?.jsonPrimitive?.int ?: 1
+        }.orElse(1)
 
     /** An open queue WebSocket; close it to leave the queue. */
     inner class QueueSocket internal constructor(
@@ -237,8 +264,8 @@ class BackendClient(
         fun leave() {
             runCatching {
                 val message = json.encodeToString(
-                    WireQueueClientMessage.serializer(),
-                    WireQueueClientMessage.LeaveQueue,
+                    QueueClientMessage.serializer(),
+                    QueueClientMessage.LeaveQueue,
                 )
                 socket.sendText(message, true)
                 socket.sendClose(WebSocket.NORMAL_CLOSURE, "leave")
@@ -252,8 +279,8 @@ class BackendClient(
      * or the connection fails.
      */
     fun joinQueue(
-        format: String,
-        onMessage: (WireQueueServerMessage) -> Unit,
+        format: MatchFormat,
+        onMessage: (QueueServerMessage) -> Unit,
         onClosed: (reason: String?) -> Unit,
     ): QueueSocket? {
         val token = session?.token ?: return null
@@ -268,7 +295,7 @@ class BackendClient(
                     val text = buffer.toString()
                     buffer.setLength(0)
                     runCatching {
-                        json.decodeFromString(WireQueueServerMessage.serializer(), text)
+                        json.decodeFromString(QueueServerMessage.serializer(), text)
                     }.onSuccess(onMessage)
                         .onFailure { log.warn("bad queue message: $text", it) }
                 }
@@ -293,8 +320,8 @@ class BackendClient(
                 .buildAsync(URI.create(wsUrl), listener)
                 .join()
             val joinMessage = json.encodeToString(
-                WireQueueClientMessage.serializer(),
-                WireQueueClientMessage.JoinQueue(format),
+                QueueClientMessage.serializer(),
+                QueueClientMessage.JoinQueue(format),
             )
             socket.sendText(joinMessage, true).join()
             QueueSocket(socket)
@@ -309,3 +336,11 @@ class BackendClient(
         val stateRef = AtomicReference<BackendClient?>(null)
     }
 }
+
+/**
+ * The value on success, [fallback] on any failure. For reads whose failure no
+ * screen surfaces — there is no error card for a missing achievement strip, so
+ * making those callers match on [BackendClient.Fetch] would be noise.
+ */
+fun <T> BackendClient.Fetch<T>.orElse(fallback: T): T =
+    if (this is BackendClient.Fetch.Ok) value else fallback

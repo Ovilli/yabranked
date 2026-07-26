@@ -26,6 +26,14 @@ interface RatingSystem {
     val initialRating: Int
 
     /**
+     * Matches a player owes before their rating is treated as real. The engine
+     * needs it for the K-factor schedule and the ladder needs it to decide who
+     * is placed; declaring it twice let the K-factor and the client's
+     * "placements remaining" drift apart, so it lives here only.
+     */
+    val placementMatches: Int
+
+    /**
      * Apply one match result. [outcome] is from player A's perspective
      * via [MatchOutcome.TEAM_A_WIN]/[MatchOutcome.TEAM_B_WIN]/[MatchOutcome.DRAW].
      * [MatchOutcome.VOID] must return both states unchanged.

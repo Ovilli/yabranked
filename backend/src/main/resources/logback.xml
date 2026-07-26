@@ -1,0 +1,20 @@
+<configuration>
+    <!-- callId is set by the CallId plugin (see ops/RequestLogging.kt); it is
+         blank for anything that isn't serving a request. -->
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{24} %X{callId:-} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- Netty and Hikari are chatty at INFO on every connection. -->
+    <logger name="io.netty" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="WARN"/>
+    <!-- The websocket handler logs a stack trace for every client that walks
+         away mid-frame, which is most of them. -->
+    <logger name="io.ktor.server.websocket" level="WARN"/>
+</configuration>

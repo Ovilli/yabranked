@@ -14,6 +14,8 @@ import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchResultReport
 import dev.yabranked.proto.PlayerProfile
+import dev.yabranked.proto.SessionRequest
+import dev.yabranked.proto.SessionResponse
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.get
@@ -79,7 +81,8 @@ class ApiTest {
         val b = UUID.randomUUID()
         matchService.getOrCreatePlayer(a, "Anna")
         matchService.getOrCreatePlayer(b, "Ben")
-        val match = matchService.createMatch(
+
+        fun newMatch() = matchService.createMatch(
             QueueMatch(
                 QueueEntry(a, 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
                 QueueEntry(b, 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
@@ -87,6 +90,17 @@ class ApiTest {
             MatchFormat.LOCKOUT_1V1,
         )
 
+        // Only placed players are ranked, so get both past placements before
+        // the leaderboard assertion below can say anything.
+        repeat(matchService.placementMatches - 1) {
+            val filler = newMatch()
+            matchService.settle(
+                MatchResultReport(filler.id.toString(), MatchOutcome.TEAM_A_WIN, 700, 11, 3),
+                filler.serverToken,
+            )
+        }
+
+        val match = newMatch()
         val report = MatchResultReport(match.id.toString(), MatchOutcome.TEAM_A_WIN, 700, 11, 3)
 
         // wrong token -> 401

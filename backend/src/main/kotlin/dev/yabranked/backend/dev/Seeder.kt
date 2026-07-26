@@ -1,5 +1,8 @@
 package dev.yabranked.backend.dev
 
+import dev.yabranked.backend.achievement.AchievementContext
+import dev.yabranked.backend.achievement.AchievementDef
+import dev.yabranked.backend.store.AchievementStore
 import dev.yabranked.backend.store.MatchRecord
 import dev.yabranked.backend.store.MatchStatus
 import dev.yabranked.backend.store.MatchStore
@@ -57,7 +60,13 @@ object Seeder {
     private const val DRAW_CHANCE = 0.04
     private val SPREAD = java.time.Duration.ofDays(14)
 
-    fun seed(players: PlayerStore, matches: MatchStore, season: Int, selfName: String? = null) {
+    fun seed(
+        players: PlayerStore,
+        matches: MatchStore,
+        season: Int,
+        selfName: String? = null,
+        achievements: AchievementStore? = null,
+    ) {
         val rng = Random(20260723)
         val now = Instant.now()
 
@@ -87,6 +96,7 @@ object Seeder {
         val played = bots.associate { it.name to 0 }.toMutableMap()
         val playtime = bots.associate { it.name to 0L }.toMutableMap()
         val forfeits = bots.associate { it.name to 0 }.toMutableMap()
+        val peak = bots.associate { it.name to 1000 }.toMutableMap()
 
         val totalRounds = bots.size * AVG_GAMES_PER_PLAYER / 2
         val stepSeconds = SPREAD.seconds / totalRounds.coerceAtLeast(1)
@@ -126,6 +136,18 @@ object Seeder {
             }
             val forfeitedByUuid = if (loser != null && rng.nextDouble() < 0.08) uuidOf.getValue(loser) else null
 
+            // Plausible bingo item counts: winner leads, forfeits end early/low.
+            val winnerItems = if (forfeitedByUuid != null) rng.nextInt(1, 4) else rng.nextInt(5, 10)
+            val loserItems = if (forfeitedByUuid != null) 0 else rng.nextInt(0, winnerItems)
+            val itemsA: Int?
+            val itemsB: Int?
+            when (outcome) {
+                MatchOutcome.TEAM_A_WIN -> { itemsA = winnerItems; itemsB = loserItems }
+                MatchOutcome.TEAM_B_WIN -> { itemsA = loserItems; itemsB = winnerItems }
+                MatchOutcome.DRAW -> { val t = rng.nextInt(4, 8); itemsA = t; itemsB = t }
+                MatchOutcome.VOID -> { itemsA = null; itemsB = null }
+            }
+
             matches.insert(
                 MatchRecord(
                     id = UUID.randomUUID(),
@@ -148,8 +170,8 @@ object Seeder {
                     ratingAAfter = newA,
                     ratingBAfter = newB,
                     durationSeconds = duration,
-                    teamAScore = null,
-                    teamBScore = null,
+                    teamAScore = itemsA,
+                    teamBScore = itemsB,
                     forfeitedBy = forfeitedByUuid,
                     createdAt = completedAt.minusSeconds(duration),
                     completedAt = completedAt,
@@ -158,6 +180,8 @@ object Seeder {
 
             rating[a.name] = newA
             rating[b.name] = newB
+            peak[a.name] = maxOf(peak.getValue(a.name), newA)
+            peak[b.name] = maxOf(peak.getValue(b.name), newB)
             played[a.name] = played.getValue(a.name) + 1
             played[b.name] = played.getValue(b.name) + 1
             playtime[a.name] = playtime.getValue(a.name) + duration
@@ -172,19 +196,34 @@ object Seeder {
         }
 
         bots.forEach {
-            players.upsertStats(
-                SeasonStats(
-                    uuid = uuidOf.getValue(it.name),
-                    season = season,
-                    rating = rating.getValue(it.name),
-                    matchesPlayed = played.getValue(it.name),
-                    wins = wins.getValue(it.name),
-                    losses = losses.getValue(it.name),
-                    draws = draws.getValue(it.name),
-                    playtimeSeconds = playtime.getValue(it.name),
-                    forfeits = forfeits.getValue(it.name),
-                )
+            val stats = SeasonStats(
+                uuid = uuidOf.getValue(it.name),
+                season = season,
+                rating = rating.getValue(it.name),
+                matchesPlayed = played.getValue(it.name),
+                wins = wins.getValue(it.name),
+                losses = losses.getValue(it.name),
+                draws = draws.getValue(it.name),
+                playtimeSeconds = playtime.getValue(it.name),
+                forfeits = forfeits.getValue(it.name),
+                peakRating = peak.getValue(it.name),
             )
+            players.upsertStats(stats)
+
+            // Give the fixture players any achievements their totals qualify for,
+            // so the profile badge row has something to show without a live match.
+            // Streaks aren't tracked in the fixture, so streak milestones stay
+            // locked here — that's fine for a visual review.
+            if (achievements != null) {
+                val context = AchievementContext(
+                    stats = players.lifetimeStats(stats.uuid),
+                    winStreak = 0,
+                    placed = stats.matchesPlayed >= 5,
+                )
+                for (def in AchievementDef.qualifying(context)) {
+                    achievements.award(uuidOf.getValue(it.name), def.id, Instant.now())
+                }
+            }
         }
     }
 

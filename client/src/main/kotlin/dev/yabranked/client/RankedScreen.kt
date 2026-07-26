@@ -1,5 +1,7 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -36,7 +38,7 @@ class RankedScreen(
         var h = if (RankedState.isAuthenticated) 1 else 0
         h = h * 31 + (if (RankedState.isQueued) 1 else 0)
         h = h * 31 + (if (RankedState.activeMatch != null) 1 else 0)
-        h = h * 31 + RankedState.selectedFormat.id.hashCode()
+        h = h * 31 + RankedState.selectedFormat.name.hashCode()
         return h
     }
 
@@ -144,7 +146,7 @@ class RankedScreen(
 
     /** Steps through the available formats; wraps back to the first. */
     private fun cycleFormat() {
-        val formats = WireFormat.all
+        val formats = MatchFormat.entries
         val next = (formats.indexOf(RankedState.selectedFormat) + 1) % formats.size
         RankedState.selectedFormat = formats[next]
         refresh()
@@ -167,11 +169,16 @@ class RankedScreen(
                     is BackendClient.AuthResult.Ok -> {
                         RankedState.backend = backend
                         RankedState.profile = result.session.profile
+                        // The server is authoritative for these two prefs; mirror
+                        // them into the local toggles so the options screen shows
+                        // the real state and doesn't clobber it on next save.
+                        RankedState.hideOwnFlag = result.session.profile.hideFlag
+                        RankedState.hideElo = result.session.profile.hideRating
                         RankedState.statusMessage = null
                         // Populate the win streak shown on the profile card.
                         val uuid = result.session.profile.uuid
                         YabRankedClient.workers.execute {
-                            val hist = backend.fetchHistory(uuid, limit = 20)
+                            val hist = backend.fetchHistory(uuid, limit = 20).orElse(emptyList())
                             minecraft.execute {
                                 RankedState.winStreak = RankedState.currentWinStreak(hist)
                                 refresh()
@@ -194,9 +201,6 @@ class RankedScreen(
         // new queue status (the socket itself connects asynchronously)
         refresh()
     }
-
-    // Keyboard shortcut labels are shown in the UI. Actual key handling is
-    // version-specific; wire this in once the target MC version is confirmed.
 
     // --- rendering ---
 
@@ -241,7 +245,7 @@ class RankedScreen(
         )
     }
 
-    private fun drawProfileCard(g: GuiGraphicsExtractor, centerX: Int, profile: WireProfile) {
+    private fun drawProfileCard(g: GuiGraphicsExtractor, centerX: Int, profile: PlayerProfile) {
         val left = centerX - CARD_WIDTH / 2
         val right = left + CARD_WIDTH
         val tierColor = Ui.tierColor(profile.tier)
@@ -333,6 +337,17 @@ class RankedScreen(
         if (snapshot != null) {
             // searching indicator: dots cycle so the screen never looks frozen
             val dots = ".".repeat(((System.currentTimeMillis() / 500) % 4).toInt())
+            if (snapshot.preparingMatch) {
+                // Paired already — the wait now is the match server booting,
+                // which is a very different thing to still be looking at.
+                g.centeredText(font, "Opponent found — starting server$dots", centerX, y, Ui.ACCENT)
+                g.centeredText(
+                    font,
+                    "§7${Ui.duration(snapshot.waitedSeconds)} · this can take up to a minute",
+                    centerX, y + 12, Ui.TEXT_DIM,
+                )
+                return
+            }
             g.centeredText(font, "Searching for an opponent$dots", centerX, y, Ui.ACCENT)
             // Rough ETA: with someone else already queued a match is imminent;
             // otherwise the MMR band widens with wait time, so the estimate

@@ -1,30 +1,37 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 /**
  * Client-side ranked session state, mutated only on the render thread
  * (network callbacks hop over via Minecraft#execute).
  */
 object RankedState {
     var backend: BackendClient? = null
-    var profile: WireProfile? = null
+    var profile: PlayerProfile? = null
 
     var queue: BackendClient.QueueSocket? = null
     var queueStatus: String? = null
 
+    /** True while [RankedQueue] is retrying a dropped socket. There is no live
+     *  socket then, but the player is still queueing and every screen should
+     *  keep saying so — hence [isQueued] counts it. */
+    var queueReconnecting: Boolean = false
+
     /** Format the player has selected on the ranked screen; drives the next queue join. */
-    var selectedFormat: WireFormat = WireFormat.default
+    var selectedFormat: MatchFormat = MatchFormat.LOCKOUT_1V1
 
     /** Latest queue tick from the server, rendered as the searching panel. */
-    var queueSnapshot: WireQueueServerMessage.QueueState? = null
+    var queueSnapshot: QueueServerMessage.QueueState? = null
 
     /** Set while connected to (or connecting to) a ranked match server. */
-    var activeMatch: WireQueueServerMessage.MatchFound? = null
+    var activeMatch: QueueServerMessage.MatchFound? = null
 
     /** Wall-clock ms when the current match server was joined, for the HUD timer. */
     var matchStartedAt: Long? = null
 
     /** The most recently completed match, kept for the report button. */
-    var lastMatch: WireQueueServerMessage.MatchFound? = null
+    var lastMatch: QueueServerMessage.MatchFound? = null
     var lastMatchReported: Boolean = false
 
     /** Rating change from the most recently completed match, for display. */
@@ -51,9 +58,11 @@ object RankedState {
     var hideElo: Boolean = false
     /** Hide the opponent's MMR on the match-found screen and in-match HUD. */
     var hideOpponentElo: Boolean = false
+    /** Colour-blind-safe win/loss palette (blue/orange instead of green/red). */
+    var colorblind: Boolean = false
 
     /** Consecutive wins from the front of a newest-first history list. */
-    fun currentWinStreak(entries: List<WireHistoryEntry>): Int {
+    fun currentWinStreak(entries: List<MatchHistoryEntry>): Int {
         var n = 0
         for (e in entries) {
             if (e.result == "win") n++ else break
@@ -62,11 +71,12 @@ object RankedState {
     }
 
     val isAuthenticated: Boolean get() = backend?.session != null
-    val isQueued: Boolean get() = queue != null
+    val isQueued: Boolean get() = queue != null || queueReconnecting
 
     fun reset() {
         queue?.leave()
         queue = null
+        queueReconnecting = false
         queueStatus = null
         queueSnapshot = null
         activeMatch = null

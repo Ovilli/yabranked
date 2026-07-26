@@ -10,10 +10,14 @@ import kotlin.math.roundToInt
  */
 class EloRatingSystem(
     override val initialRating: Int = 1000,
-    private val placementMatches: Int = 5,
+    override val placementMatches: Int = 5,
     private val placementK: Double = 80.0,
     private val standardK: Double = 32.0,
-    /** Ratings never drop below this floor. */
+    /**
+     * Ratings never drop below this floor. Also the only place an otherwise
+     * conserved exchange loses points: a player already at the floor cannot
+     * pay the winner in full.
+     */
     private val floor: Int = 0,
 ) : RatingSystem {
 
@@ -38,17 +42,33 @@ class EloRatingSystem(
             MatchOutcome.DRAW -> 0.5
             MatchOutcome.VOID -> error("unreachable")
         }
-        val scoreB = 1.0 - scoreA
 
         val expectedA = expectedScore(playerA.rating, playerB.rating)
-        val expectedB = 1.0 - expectedA
+        // How much A over-performed; B's is the exact negation, which is what
+        // makes the exchange below symmetric.
+        val surpriseA = scoreA - expectedA
 
-        val newA = (playerA.rating + kFor(playerA) * (scoreA - expectedA)).roundToInt()
-        val newB = (playerB.rating + kFor(playerB) * (scoreB - expectedB)).roundToInt()
+        val kA = kFor(playerA)
+        val kB = kFor(playerB)
+        val deltaA = (kA * surpriseA).roundToInt()
+        val deltaB = if (kA == kB) {
+            // Same K: hand the winner exactly what the loser gives up. Rounding
+            // once instead of per player matters — rounding both ends
+            // independently minted or burned a point on every half-value delta.
+            -deltaA
+        } else {
+            // The one deliberate break from conservation. A player in placements
+            // has to converge on their real level fast (K=80), and charging
+            // their settled opponent for that swing would make drawing a
+            // placement player a coin flip on 80 points. The surplus is minted
+            // (or burned) knowingly and is bounded: every account gets
+            // [placementMatches] of these per season and no more.
+            (kB * -surpriseA).roundToInt()
+        }
 
         return RatingUpdate(
-            playerA = RatingState(newA.coerceAtLeast(floor), playerA.matchesPlayed + 1),
-            playerB = RatingState(newB.coerceAtLeast(floor), playerB.matchesPlayed + 1),
+            playerA = RatingState((playerA.rating + deltaA).coerceAtLeast(floor), playerA.matchesPlayed + 1),
+            playerB = RatingState((playerB.rating + deltaB).coerceAtLeast(floor), playerB.matchesPlayed + 1),
         )
     }
 }

@@ -1,5 +1,7 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.EditBox
@@ -16,7 +18,7 @@ class MatchHistoryScreen(
     private val parent: Screen?,
 ) : Screen(Component.literal("Match History")) {
 
-    private var entries: List<WireHistoryEntry>? = null
+    private var entries: List<MatchHistoryEntry>? = null
     private var error: String? = null
 
     /** Y of the first row, set during render so click hit-testing matches it
@@ -35,10 +37,19 @@ class MatchHistoryScreen(
     private var selected = -1
 
     /** Rows after the opponent-name search filter. */
-    private fun filtered(list: List<WireHistoryEntry>): List<WireHistoryEntry> {
+    private fun filtered(list: List<MatchHistoryEntry>): List<MatchHistoryEntry> {
         val q = search?.value?.trim().orEmpty()
         return if (q.isEmpty()) list else list.filter { it.opponent.name.contains(q, ignoreCase = true) }
     }
+
+    /** Rating trend points, oldest→newest, dropping matches that never counted. */
+    private fun chartPoints(list: List<MatchHistoryEntry>): List<Ui.ChartPoint> =
+        list.filter { it.ratingAfter != null }
+            .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
+            .reversed()
+
+    private val opened = FirstInit()
+    private val loaded = FirstInit()
 
     override fun init() {
         addRenderableWidget(
@@ -52,7 +63,7 @@ class MatchHistoryScreen(
                 setResponder { scroll = 0; selected = -1 }
             }
         )
-        Sfx.open()
+        opened.once { Sfx.open() }
 
         val backend = RankedState.backend
         val profile = RankedState.profile
@@ -60,14 +71,22 @@ class MatchHistoryScreen(
             error = "Not signed in"
             return
         }
-        if (entries == null) {
+        // Once per screen, not once per resize — see PlayerProfileScreen.
+        loaded.once {
             val minecraft = this.minecraft
             YabRankedClient.workers.execute {
                 val fetched = backend.fetchHistory(profile.uuid, limit = 50)
                 minecraft.execute {
-                    entries = fetched
-                    RankedState.winStreak = RankedState.currentWinStreak(fetched)
-                    if (fetched.isEmpty()) error = "Play a ranked match to see your history"
+                    when (fetched) {
+                        is BackendClient.Fetch.Ok -> {
+                            entries = fetched.value
+                            RankedState.winStreak = RankedState.currentWinStreak(fetched.value)
+                            if (fetched.value.isEmpty()) error = "Play a ranked match to see your history"
+                        }
+                        // "why" matters here: offline, expired session and an
+                        // outdated mod each need a different move from the player.
+                        is BackendClient.Fetch.Error -> error = fetched.message
+                    }
                 }
             }
         }
@@ -120,11 +139,12 @@ class MatchHistoryScreen(
         // filtered rows get the full height. History arrives newest-first, so
         // reverse it and drop matches that never counted (voided = null after).
         rowsTop = TOP
-        if (!searching && list.size >= 2) {
-            val points = list.filter { it.ratingAfter != null }
-                .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
-                .reversed()
+        val points = chartPoints(list)
+        if (!searching && points.size >= 2) {
             Ui.eloChart(g, font, left, CHART_TOP, WIDTH, CHART_HEIGHT, points, mouseX, mouseY)
+            // expand affordance, tucked at the plot's top-right (clear of the axis)
+            val hint = "⤢ expand"
+            g.text(font, "§8$hint", left + WIDTH - 32 - font.width(hint) - 2, CHART_TOP + 1, Ui.TEXT_FAINT)
             rowsTop = CHART_TOP + CHART_HEIGHT + 6
         }
 
@@ -170,7 +190,7 @@ class MatchHistoryScreen(
             GLFW.GLFW_KEY_ENTER, GLFW.GLFW_KEY_KP_ENTER -> {
                 shown.getOrNull(selected)?.let { entry ->
                     Sfx.select()
-                    minecraft.setScreenAndShow(PlayerProfileScreen(this, entry.opponent.uuid, entry.opponent.name))
+                    minecraft.setScreenAndShow(MatchDetailScreen(this, entry))
                 }
                 return true
             }
@@ -195,7 +215,7 @@ class MatchHistoryScreen(
         g.centeredText(font, "§7Loading…", centerX, TOP + 5 * ROW_HEIGHT + 8, Ui.TEXT_DIM)
     }
 
-    private fun drawRow(g: GuiGraphicsExtractor, left: Int, y: Int, entry: WireHistoryEntry, hovered: Boolean) {
+    private fun drawRow(g: GuiGraphicsExtractor, left: Int, y: Int, entry: MatchHistoryEntry, hovered: Boolean) {
         val color = resultColor(entry.result)
 
         Ui.row(g, left, y, WIDTH, ROW_HEIGHT - 1)
@@ -245,6 +265,19 @@ class MatchHistoryScreen(
         val mouseX = event.x()
         val mouseY = event.y()
         if (mouseX < left || mouseX > left + WIDTH) return false
+
+        // Click the trend chart to open the full-screen version.
+        val searching = !search?.value?.trim().isNullOrEmpty()
+        val points = entries?.let { chartPoints(it) }.orEmpty()
+        if (!searching && points.size >= 2 &&
+            mouseY >= CHART_TOP && mouseY < CHART_TOP + CHART_HEIGHT
+        ) {
+            Sfx.select()
+            val name = RankedState.profile?.name ?: "Your"
+            minecraft.setScreenAndShow(MmrChartScreen(this, points, "$name · last ${points.size} rated matches"))
+            return true
+        }
+
         val visible = ((height - 40 - rowsTop) / ROW_HEIGHT).coerceAtLeast(1)
         for (i in 0 until visible) {
             val index = i + scroll
@@ -253,7 +286,7 @@ class MatchHistoryScreen(
             if (mouseY >= y && mouseY < y + ROW_HEIGHT - 1) {
                 val entry = shown[index]
                 Sfx.select()
-                minecraft.setScreenAndShow(PlayerProfileScreen(this, entry.opponent.uuid, entry.opponent.name))
+                minecraft.setScreenAndShow(MatchDetailScreen(this, entry))
                 return true
             }
         }

@@ -41,8 +41,11 @@ class IconButton(
     }
 
     override fun extractWidgetRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        // Keyboard/controller focus lights the plate like a hover does, and adds
+        // a ring so a focused button is still tellable from a hovered one.
+        if (isFocused) Ui.focusRing(g, x, y, width, height)
         Ui.panel(g, x, y, width, height)
-        if (isHovered) {
+        if (isHovered || isFocused) {
             // brighten the plate instead of swapping to a second sprite
             g.fill(x + 1, y + 1, x + width - 1, y + height - 1, 0x33FFC93C)
         }

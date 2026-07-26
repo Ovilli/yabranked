@@ -16,6 +16,8 @@ import dev.yabranked.proto.MatchHistoryEntry
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchResultReport
 import dev.yabranked.proto.ReportRequest
+import dev.yabranked.proto.SessionRequest
+import dev.yabranked.proto.SessionResponse
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -72,6 +74,51 @@ class LadderApiTest {
             match.serverToken,
         )
         return match
+    }
+
+    /**
+     * Enough wins for [a] to clear placements, since only placed players are
+     * ranked. Returns the last match played.
+     */
+    private fun placedPlayer(a: UUID, b: UUID): dev.yabranked.backend.store.MatchRecord {
+        var last = playedMatch(a, b)
+        repeat(matchService.placementMatches - 1) { last = playedMatch(a, b) }
+        return last
+    }
+
+    @Test
+    fun `the leaderboard lists only placed players and says so honestly`() = testApplication {
+        // It used to query with minMatches=1 while hardcoding isPlaced=true, so
+        // one lucky win could show as rank 1 wearing a tier it had not earned.
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+
+        playedMatch(UUID.randomUUID(), UUID.randomUUID())
+        assertEquals("[]", client.get("/v1/leaderboard").body<String>().trim(),
+            "a player mid-placement was ranked against established players")
+
+        val a = UUID.randomUUID()
+        placedPlayer(a, UUID.randomUUID())
+
+        val ladder: List<dev.yabranked.proto.PlayerProfile> = client.get("/v1/leaderboard").body()
+        val anna = ladder.single { it.uuid == a.toString() }
+        assertEquals(0, anna.placementMatchesRemaining)
+        assertTrue(anna.tier != "Unranked", "a placed player should carry a real tier, got ${anna.tier}")
+    }
+
+    @Test
+    fun `the leaderboard and the profile agree about a player's tier`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+        val a = UUID.randomUUID()
+        placedPlayer(a, UUID.randomUUID())
+
+        val ladder: List<dev.yabranked.proto.PlayerProfile> = client.get("/v1/leaderboard").body()
+        val fromLadder = ladder.single { it.uuid == a.toString() }
+        val fromProfile: dev.yabranked.proto.PlayerProfile = client.get("/v1/players/$a").body()
+
+        assertEquals(fromProfile.tier, fromLadder.tier)
+        assertEquals(fromProfile.placementMatchesRemaining, fromLadder.placementMatchesRemaining)
     }
 
     @Test
@@ -180,7 +227,7 @@ class LadderApiTest {
         application { rankedApi(deps()) }
         val client = jsonClient()
 
-        playedMatch(UUID.randomUUID(), UUID.randomUUID())
+        placedPlayer(UUID.randomUUID(), UUID.randomUUID())
         assertTrue(client.get("/v1/leaderboard").body<String>().contains("Anna"))
 
         // no admin token -> forbidden
@@ -190,8 +237,10 @@ class LadderApiTest {
         assertEquals(HttpStatusCode.OK, advanced.status)
         assertEquals(2, seasons.currentSeason)
 
+        // The rollover seeds carried ratings but zeroes their match counts, so
+        // nobody is placed in the new season until they play it.
         assertEquals("[]", client.get("/v1/leaderboard").body<String>().trim())
-        // previous season remains queryable
+        // previous season remains queryable as its final standings
         assertTrue(client.get("/v1/leaderboard?season=1").body<String>().contains("Anna"))
     }
 

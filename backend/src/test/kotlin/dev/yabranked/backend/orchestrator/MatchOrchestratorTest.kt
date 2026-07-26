@@ -27,21 +27,33 @@ private class FakeRuntime : ContainerRuntime {
     val removed = ConcurrentLinkedQueue<String>()
     var failNext = false
 
+    /** Limits the last [run] was asked for; the host protection is easy to drop silently. */
+    var lastLimits: ContainerLimits? = null
+
     override fun run(
         name: String,
         image: String,
         env: Map<String, String>,
         hostNetwork: Boolean,
         publishPorts: Map<Int, Int>,
+        secretEnv: Map<String, String>,
+        limits: ContainerLimits,
     ): String {
+        lastLimits = limits
         if (failNext) error("simulated docker failure")
-        started.add(Triple(name, image, env))
+        // the container sees both maps as one environment; how they got there
+        // is the runtime's business, not the orchestrator's
+        started.add(Triple(name, image, env + secretEnv))
         return "container-$name"
     }
 
     override fun remove(name: String) {
         removed.add(name)
     }
+
+    /** Containers still "running": started, minus the ones already removed. */
+    override fun list(namePrefix: String): List<String> =
+        started.map { it.first }.filter { it.startsWith(namePrefix) && it !in removed }
 }
 
 class MatchOrchestratorTest {
@@ -55,6 +67,7 @@ class MatchOrchestratorTest {
             image = "yabranked-match:test",
             publicHost = "match.example.com",
             backendUrlForAgents = "http://localhost:8080",
+            limits = ContainerLimits(memory = "4g", cpus = "2"),
         ),
         runtime = runtime,
         matchService = matchService,
@@ -109,6 +122,20 @@ class MatchOrchestratorTest {
     }
 
     @Test
+    fun `match containers are capped so one cannot starve the host`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        try {
+            orchestrator.start(scope)
+            createMatch()
+
+            awaitTrue { runtime.started.isNotEmpty() }
+            assertEquals(ContainerLimits(memory = "4g", cpus = "2"), runtime.lastLimits)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
     fun `tears down container when the match settles`() {
         val scope = CoroutineScope(Dispatchers.Default)
         try {
@@ -124,6 +151,66 @@ class MatchOrchestratorTest {
 
             awaitTrue { runtime.removed.isNotEmpty() }
             assertEquals("yabranked-${match.id}", runtime.removed.first())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `reconcile voids matches orphaned by a restart and sweeps their containers`() {
+        val match = createMatch() // no orchestrator running: nothing provisioned it
+        runtime.started.add(Triple("yabranked-leftover", "yabranked-match:test", emptyMap()))
+
+        orchestrator.reconcile()
+
+        assertEquals(MatchStatus.VOIDED, matches.get(match.id)?.status)
+        assertTrue("yabranked-leftover" in runtime.removed, "leftover container not swept")
+    }
+
+    @Test
+    fun `does not hand the same port to two live matches`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        try {
+            orchestrator.start(scope)
+            val first = createMatch()
+            val second = createMatch()
+
+            awaitTrue { runtime.started.size == 2 }
+            awaitTrue {
+                matches.get(first.id)?.serverAddress != null && matches.get(second.id)?.serverAddress != null
+            }
+            assertTrue(
+                matches.get(first.id)!!.serverAddress != matches.get(second.id)!!.serverAddress,
+                "both matches were given the same address",
+            )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `voids the match when the port range is exhausted`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        val tiny = MatchOrchestrator(
+            config = OrchestratorConfig(
+                image = "yabranked-match:test",
+                publicHost = "match.example.com",
+                backendUrlForAgents = "http://localhost:8080",
+                portRangeSize = 1,
+            ),
+            runtime = runtime,
+            matchService = matchService,
+            matches = matches,
+            players = players,
+        )
+        try {
+            tiny.start(scope)
+            createMatch()
+            awaitTrue { runtime.started.isNotEmpty() }
+            val second = createMatch()
+
+            awaitTrue { matches.get(second.id)?.status == MatchStatus.VOIDED }
+            assertEquals(1, runtime.started.size, "second match should not have started a container")
         } finally {
             scope.cancel()
         }

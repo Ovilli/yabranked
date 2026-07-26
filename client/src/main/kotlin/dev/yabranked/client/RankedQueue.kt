@@ -1,6 +1,10 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import net.minecraft.client.Minecraft
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * Owns the matchmaking socket independently of any screen.
@@ -8,51 +12,68 @@ import net.minecraft.client.Minecraft
  * Queueing deliberately outlives the ranked menu — players close it and go do
  * something else while they wait — so the socket, its callbacks, and the
  * match-found handoff cannot live on a screen instance that may be gone.
+ *
+ * Every field here is touched on the render thread only; the blocking connect
+ * and the delayed reconnects are the only work handed to
+ * [YabRankedClient.workers].
  */
 object RankedQueue {
 
+    /**
+     * Join and leave debounce separately. One shared window swallowed a leave
+     * issued within 700 ms of a join — the player had already changed their
+     * mind, and we kept them queued anyway.
+     */
     private const val DEBOUNCE_MS = 700L
-    @Volatile private var lastActionAt: Long = 0L
+    private var lastJoinAt: Long = 0L
+    private var lastLeaveAt: Long = 0L
 
-    fun join(format: String = RankedState.selectedFormat.id) {
-        val minecraft = Minecraft.getInstance()
-        val backend = RankedState.backend ?: run {
+    /** Reconnect backoff, and how many tries before the queue really is over. */
+    private const val MAX_RECONNECTS = 5
+    private const val RECONNECT_BASE_MS = 1000L
+    private const val RECONNECT_MAX_MS = 8000L
+
+    /** Format the player asked to queue for; null when they are not queueing.
+     *  A dropped socket does not clear it — it is both what a reconnect
+     *  re-joins with and what tells a network blip apart from a real leave. */
+    private var wanted: MatchFormat? = null
+
+    /** Consecutive reconnects since the queue last answered us; a QueueState
+     *  proves the socket works, so [onMessage] clears it. */
+    private var reconnects = 0
+    private var pending: ScheduledFuture<*>? = null
+
+    /** Bumped whenever the intended connection changes, so a callback from a
+     *  socket the player has already abandoned cannot touch current state. */
+    private var generation = 0
+
+    fun join(format: MatchFormat = RankedState.selectedFormat) {
+        if (RankedState.backend == null) {
             RankedState.queueStatus = "§cPlease sign in first"
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastActionAt < DEBOUNCE_MS) return
-        lastActionAt = now
+        if (now - lastJoinAt < DEBOUNCE_MS) return
+        lastJoinAt = now
         if (RankedState.isQueued) return
 
         RankedState.lastRatingChange = null
         RankedState.queueStatus = "Joining queue…"
-
-        YabRankedClient.workers.execute {
-            val socket = backend.joinQueue(
-                format = format,
-                onMessage = { message -> minecraft.execute { onMessage(message) } },
-                onClosed = { reason ->
-                    minecraft.execute {
-                        RankedState.queue = null
-                        RankedState.queueSnapshot = null
-                        if (RankedState.activeMatch == null) {
-                            RankedState.queueStatus = reason?.let { "§7Queue closed: $it" }
-                        }
-                    }
-                },
-            )
-            minecraft.execute {
-                RankedState.queue = socket
-                if (socket == null) RankedState.queueStatus = "§cCould not join the queue"
-            }
-        }
+        wanted = format
+        reconnects = 0
+        connect(++generation, format)
     }
 
     fun leave() {
         val now = System.currentTimeMillis()
-        if (now - lastActionAt < DEBOUNCE_MS) return
-        lastActionAt = now
+        if (now - lastLeaveAt < DEBOUNCE_MS) return
+        lastLeaveAt = now
+
+        // Retire the generation first: the close we are about to trigger must
+        // not be mistaken for a drop and reconnected.
+        generation++
+        wanted = null
+        cancelReconnect()
 
         RankedState.queue?.leave()
         RankedState.queue = null
@@ -60,20 +81,98 @@ object RankedQueue {
         RankedState.queueStatus = null
     }
 
-    private fun onMessage(message: WireQueueServerMessage) {
+    /** Open a socket for [format] and wire its callbacks back to the render
+     *  thread. Blocking, so the connect itself runs on a worker. */
+    private fun connect(id: Int, format: MatchFormat) {
         val minecraft = Minecraft.getInstance()
+        val backend = RankedState.backend ?: return
+        YabRankedClient.workers.execute {
+            val socket = backend.joinQueue(
+                format = format,
+                onMessage = { message -> minecraft.execute { if (id == generation) onMessage(message) } },
+                onClosed = { reason -> minecraft.execute { if (id == generation) onClosed(reason) } },
+            )
+            minecraft.execute {
+                if (id != generation) {
+                    // The player left (or re-joined) while we were connecting;
+                    // this socket is nobody's queue, so drop it.
+                    socket?.leave()
+                    return@execute
+                }
+                RankedState.queue = socket
+                // A null socket already came through onClosed, which decides
+                // whether there is another attempt left to make.
+            }
+        }
+    }
+
+    /** The socket ended. Unless the player asked for that, retry with backoff. */
+    private fun onClosed(reason: String?) {
+        RankedState.queue = null
+        RankedState.queueSnapshot = null
+        val format = wanted
+        if (format == null || RankedState.activeMatch != null) {
+            RankedState.queueReconnecting = false
+            if (RankedState.activeMatch == null) {
+                RankedState.queueStatus = reason?.let { "§7Queue closed: $it" }
+            }
+            return
+        }
+
+        if (reconnects >= MAX_RECONNECTS) {
+            // Out of tries. Say so instead of dropping the player from the queue
+            // in silence, which is what used to happen on any blip.
+            wanted = null
+            RankedState.queueReconnecting = false
+            RankedState.queueStatus = "§cLost the queue connection — try again"
+            return
+        }
+
+        val delay = (RECONNECT_BASE_MS shl reconnects).coerceAtMost(RECONNECT_MAX_MS)
+        reconnects++
+        RankedState.queueReconnecting = true
+        RankedState.queueStatus = "§7Reconnecting… ($reconnects/$MAX_RECONNECTS)"
+
+        val id = ++generation
+        val minecraft = Minecraft.getInstance()
+        pending = YabRankedClient.workers.schedule(
+            { minecraft.execute { if (id == generation && wanted != null) connect(id, format) } },
+            delay,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    private fun cancelReconnect() {
+        pending?.cancel(false)
+        pending = null
+        reconnects = 0
+        RankedState.queueReconnecting = false
+    }
+
+    private fun onMessage(message: QueueServerMessage) {
+        val minecraft = Minecraft.getInstance()
+        // Anything from the server means this socket is healthy, so the next
+        // drop gets a full run of retries rather than the tail of the last one.
+        reconnects = 0
+        RankedState.queueReconnecting = false
         when (message) {
-            is WireQueueServerMessage.QueueState -> {
+            is QueueServerMessage.QueueState -> {
                 RankedState.queueSnapshot = message
                 RankedState.queueStatus = null
             }
 
-            is WireQueueServerMessage.QueueError -> {
+            is QueueServerMessage.QueueError -> {
                 RankedState.queueSnapshot = null
                 RankedState.queueStatus = "§c${message.message}"
             }
 
-            is WireQueueServerMessage.MatchFound -> {
+            is QueueServerMessage.MatchFound -> {
+                // The queue's job is done: retire it so the close that follows
+                // is not treated as a drop worth reconnecting.
+                generation++
+                wanted = null
+                cancelReconnect()
+
                 RankedState.activeMatch = message
                 RankedState.queue = null
                 RankedState.queueSnapshot = null

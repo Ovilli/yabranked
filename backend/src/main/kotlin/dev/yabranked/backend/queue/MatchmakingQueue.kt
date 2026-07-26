@@ -36,11 +36,51 @@ class MatchmakingQueue(
 ) {
     private val entries = LinkedHashMap<UUID, QueueEntry>()
 
+    /**
+     * Positions and headcounts derived from [entries], rebuilt on the first
+     * read after a mutation. Every waiting player asks for their own position
+     * once a second; deriving each one by walking the queue made a tick
+     * quadratic in queue size.
+     */
+    private var index: QueueIndex? = null
+
+    /**
+     * Both views are per format: players only ever match inside their own
+     * format, so a position counted across all of them would be a number the
+     * player can never reach — and could exceed the count shown next to it.
+     */
+    private class QueueIndex(
+        val positions: Map<UUID, Int>,
+        val sizes: Map<MatchFormat, Int>,
+    )
+
+    private fun index(): QueueIndex = index ?: buildIndex().also { index = it }
+
+    private fun buildIndex(): QueueIndex {
+        val positions = HashMap<UUID, Int>(entries.size)
+        val sizes = HashMap<MatchFormat, Int>()
+        // iteration order == enqueue order, so the running count per format is
+        // exactly that player's place in their own line
+        for (entry in entries.values) {
+            val place = (sizes[entry.format] ?: 0) + 1
+            sizes[entry.format] = place
+            positions[entry.uuid] = place
+        }
+        return QueueIndex(positions, sizes)
+    }
+
     val size: Int get() = entries.size
 
     fun contains(uuid: UUID): Boolean = uuid in entries
 
-    fun positionOf(uuid: UUID): Int = entries.keys.indexOf(uuid) + 1
+    /** The format this player is waiting in, or null if they are not queued. */
+    fun formatOf(uuid: UUID): MatchFormat? = entries[uuid]?.format
+
+    /** 1-based place in this player's own format queue; 0 if not queued. */
+    fun positionOf(uuid: UUID): Int = index().positions[uuid] ?: 0
+
+    /** How many players are waiting for [format]. */
+    fun sizeOf(format: MatchFormat): Int = index().sizes[format] ?: 0
 
     fun waitedSeconds(uuid: UUID): Long =
         entries[uuid]?.let { Duration.between(it.enqueuedAt, clock.instant()).seconds } ?: 0
@@ -49,10 +89,11 @@ class MatchmakingQueue(
     fun enqueue(uuid: UUID, rating: Int, format: MatchFormat): Boolean {
         if (uuid in entries) return false
         entries[uuid] = QueueEntry(uuid, rating, format, clock.instant())
+        index = null
         return true
     }
 
-    fun remove(uuid: UUID): Boolean = entries.remove(uuid) != null
+    fun remove(uuid: UUID): Boolean = (entries.remove(uuid) != null).also { if (it) index = null }
 
     private fun bandOf(entry: QueueEntry, now: Instant): Int {
         val waited = Duration.between(entry.enqueuedAt, now).seconds
@@ -86,6 +127,7 @@ class MatchmakingQueue(
             waiting.remove(opponent)
             entries.remove(seeker.uuid)
             entries.remove(opponent.uuid)
+            index = null
             matches += QueueMatch(seeker, opponent)
         }
 

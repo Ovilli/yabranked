@@ -10,3 +10,4 @@ docker/mods/
 # dev client run directories
 client/run/
 client/run2/
+.tokensave
