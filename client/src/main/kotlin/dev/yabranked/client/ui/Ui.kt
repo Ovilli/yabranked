@@ -1,16 +1,34 @@
 package dev.yabranked.client.ui
 
-import dev.yabranked.client.WireProfile
+import dev.yabranked.proto.PlayerProfile
 import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.resources.Identifier
+import org.slf4j.LoggerFactory
 
 /**
  * Shared drawing helpers for the ranked screens. Kept deliberately small:
  * panels, dividers, stat widgets, and the rank crest / VS sprites.
  */
 object Ui {
+    private val log = LoggerFactory.getLogger("yabranked-client")
+
+    /** Texture ids already reported by [textureFailed]. Render-thread only, so a
+     *  plain set needs no synchronisation. */
+    private val reportedTextures = mutableSetOf<String>()
+
+    /**
+     * Report a texture that would not draw — once per id, ever.
+     *
+     * The blit helpers below run every frame, so logging each failure as it
+     * happens would bury the log under thousands of identical lines a second.
+     * One line per broken asset is enough to tell "missing", "wrong format" and
+     * "drew fine but is invisible" apart, which is otherwise impossible.
+     */
+    private fun textureFailed(id: String, e: Throwable) {
+        if (reportedTextures.add(id)) log.warn("failed to draw texture $id", e)
+    }
     // --- Text palette: exactly three greyscale roles. Colour hues (WIN/LOSS/
     // ACCENT) are reserved for the win-rate bar, results, and the tier crest —
     // never mixed into body text. One role per line; no mid-string colour
@@ -27,8 +45,12 @@ object Ui {
     const val SLOT_BG = 0xFF0C0C0C.toInt()
     const val SLOT_BORDER = 0xFF3A3A3A.toInt()
 
-    const val WIN = 0xFF5BD97A.toInt()
-    const val LOSS = 0xFFE05C5C.toInt()
+    /** When true, win/loss use a blue/orange pair legible with red-green colour
+     *  blindness instead of the default green/red. Driven by the options toggle. */
+    var colorblindPalette = false
+
+    val WIN: Int get() = if (colorblindPalette) 0xFF4C9BE8.toInt() else 0xFF5BD97A.toInt()
+    val LOSS: Int get() = if (colorblindPalette) 0xFFE8913B.toInt() else 0xFFE05C5C.toInt()
     const val DRAW = 0xFF9A9A9A.toInt()
     const val ACCENT = 0xFFFFC93C.toInt()
 
@@ -184,8 +206,11 @@ object Ui {
                 FLAG_TEX_W, FLAG_TEX_H,
                 FLAG_TEX_W, FLAG_TEX_H,
             )
-        } catch (_: Throwable) {
-            // If the texture is missing, fail silently — some users set no country.
+        } catch (e: Throwable) {
+            // A player with no country is normal, so this must never be fatal —
+            // but report it once, otherwise a genuinely broken flag asset looks
+            // exactly like "nobody set a country".
+            textureFailed("flags/${code.lowercase()}", e)
         }
     }
 
@@ -200,28 +225,37 @@ object Ui {
         // Opaque base first, so the game world never shows through even if the art
         // texture is still uploading or fails to bind.
         g.fill(0, 0, width, height, 0xFF0D0B0A.toInt())
+        val art = if (blurred) "background_blur" else "background"
         try {
             g.blit(
                 RenderPipelines.GUI_TEXTURED,
-                texture(if (blurred) "background_blur" else "background"),
+                texture(art),
                 0, 0, 0f, 0f,
                 width, height,
                 BG_W, BG_H,
                 BG_W, BG_H,
             )
-        } catch (_: Throwable) {
-            // missing art: the base fill above already covers the screen
+        } catch (e: Throwable) {
+            // missing art: the base fill above already covers the screen, so the
+            // screen stays usable — the log line is the only clue it is missing
+            textureFailed("gui/$art", e)
         }
         // Scrim knocks the art back so foreground panels/text stay legible.
         g.fill(0, 0, width, height, scrim shl 24)
     }
 
     /**
-     * Draw a dimmed user background banner. Falls back to "default" on errors.
-     * The source is sampled from a 128x128 area (conventional art size) and
-     * scaled to [width]×[height]. Any failure is silently ignored.
+     * Draw a dimmed user background banner. The source is sampled from a 128x128
+     * area (conventional art size) and scaled to [width]×[height]. A failure
+     * leaves the banner blank rather than throwing, and is logged once.
+     *
+     * [alpha] is the black scrim laid over the art: high enough that text stays
+     * readable over busy backgrounds, low enough that the art the player picked
+     * is actually recognisable. 0xAA erased everything but the boldest images,
+     * which made the whole feature look broken; 0x55 keeps text legible on all
+     * the shipped art. Callers over denser text can pass more.
      */
-    fun drawUserBackground(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int, id: String?, alpha: Int = 0xAA) {
+    fun drawUserBackground(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int, id: String?, alpha: Int = 0x55) {
         val key = (id?.ifBlank { null } ?: "default").lowercase()
         try {
             g.blit(
@@ -234,8 +268,10 @@ object Ui {
             // Dim overlay for legibility over busy art
             val dim = (alpha shl 24)
             g.fill(x, y, x + width, y + height, dim)
-        } catch (_: Throwable) {
-            // ignore: missing background or unexpected format
+        } catch (e: Throwable) {
+            // Never fatal — the banner just stays empty — but "the background does
+            // nothing" is undiagnosable without knowing which id failed to bind.
+            textureFailed("gui/user_background/$key", e)
         }
     }
 
@@ -292,6 +328,22 @@ object Ui {
         g.fill(x + 1, y + 1, x + width - 1, y + height - 1, PANEL_BG)
     }
 
+    /**
+     * Hollow ring drawn just outside a widget to mark keyboard/controller focus.
+     *
+     * Sits outside rather than replacing the hover styling, so a widget that is
+     * both hovered and focused still reads as two separate things — otherwise
+     * tabbing through a screen moves a cursor nobody can see.
+     */
+    fun focusRing(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int, color: Int = ACCENT) {
+        val x1 = x + width
+        val y1 = y + height
+        g.fill(x - 1, y - 1, x1 + 1, y, color)
+        g.fill(x - 1, y1, x1 + 1, y1 + 1, color)
+        g.fill(x - 1, y, x, y1, color)
+        g.fill(x1, y, x1 + 1, y1, color)
+    }
+
     /** A thin accent stripe, used to colour a panel by tier or result. */
     fun accentBar(g: GuiGraphicsExtractor, x: Int, y: Int, height: Int, color: Int) {
         g.fill(x, y, x + 2, y + height, color)
@@ -315,7 +367,7 @@ object Ui {
         }
     }
 
-    fun winRatePercent(profile: WireProfile): Int {
+    fun winRatePercent(profile: PlayerProfile): Int {
         val decided = profile.wins + profile.losses
         return if (decided == 0) 0 else (profile.wins * 100) / decided
     }
@@ -460,13 +512,15 @@ object Ui {
             return ratings[i0] + (ratings[i1] - ratings[i0]) * f
         }
 
-        // Horizontal gridlines at hi / mid / lo of the *data* range, with MMR
-        // labels on the right axis so values are readable, not just relative.
-        for (lvl in listOf(rawHi, (rawHi + rawLo) / 2, rawLo)) {
+        // Horizontal gridlines across the data range, more on a taller plot, each
+        // with an MMR label on the right axis so values read absolute, not relative.
+        val gridLevels = if (plotH >= 120) 6 else if (plotH >= 80) 5 else 3
+        for (k in 0 until gridLevels) {
+            val lvl = rawLo + (rawHi - rawLo) * k / (gridLevels - 1)
             val gy = py(lvl)
             var gx = plotL
             while (gx < plotR) {
-                g.fill(gx, gy, gx + 2, gy + 1, 0x1AFFFFFF)
+                g.fill(gx, gy, gx + 2, gy + 1, 0x16FFFFFF)
                 gx += 4
             }
             textRight(g, font, "§7$lvl", x + width - 3, gy - 3, TEXT_FAINT)
@@ -474,16 +528,25 @@ object Ui {
 
         val up = ratings.last() >= ratings.first()
         val lineColor = if (up) WIN else LOSS
-        val areaColor = (0x24 shl 24) or (lineColor and 0x00FFFFFF)
+        // Thicker line + a real vertical gradient (bright near the line, fading to
+        // near-transparent at the floor) scale the chart up without looking sparse.
+        val thick = if (plotH >= 120) 1 else 0
+        val gradH = (plotH / 2).coerceAtLeast(8)
+        val areaBase = (0x0E shl 24) or (lineColor and 0x00FFFFFF)
+        val areaGlow = (0x30 shl 24) or (lineColor and 0x00FFFFFF)
 
         // Column render: for every pixel of width, interpolate the value, fill the
-        // area beneath it, then a 2px line cap. Smoother than segment-to-segment.
+        // area beneath it, then the line cap. Smoother than segment-to-segment.
         for (cx in 0..plotW) {
             val sx = plotL + cx
             val v = valueAt(if (plotW == 0) 0f else cx.toFloat() / plotW)
             val ly = pyF(v).toInt().coerceIn(plotT, plotB)
-            if (ly < plotB) g.fill(sx, ly, sx + 1, plotB, areaColor)
-            g.fill(sx, (ly - 1).coerceAtLeast(plotT), sx + 1, (ly + 1).coerceAtMost(plotB), lineColor)
+            if (ly < plotB) {
+                g.fill(sx, ly, sx + 1, plotB, areaBase)            // dim base to the floor
+                val glowBot = (ly + gradH).coerceAtMost(plotB)
+                g.fill(sx, ly, sx + 1, glowBot, areaGlow)          // brighter band near the line
+            }
+            g.fill(sx, (ly - 1 - thick).coerceAtLeast(plotT), sx + 1, (ly + 1 + thick).coerceAtMost(plotB), lineColor)
         }
 
         // Tier threshold lines: a faint tier-coloured rule at each metal floor
@@ -536,15 +599,33 @@ object Ui {
         val deltaText = if (delta >= 0) "§a▲ +$delta" else "§c▼ $delta"
         g.text(font, deltaText, plotL + 1, plotT - 1, WHITE)
 
-        // Bottom time axis: oldest on the left, "now" on the right.
-        points.first().at?.let {
-            val ago = relativeTime(it)
-            if (ago.isNotEmpty()) g.text(font, "§8$ago", plotL, plotB + 1, TEXT_FAINT)
+        // Bottom time axis. On a wide plot spread several dated ticks across it;
+        // otherwise just oldest-left / now-right.
+        if (plotW >= 240 && points.first().at != null) {
+            val ticks = 4
+            for (k in 0..ticks) {
+                val idx = Math.round(k.toFloat() / ticks * (n - 1)).toInt().coerceIn(0, n - 1)
+                val label = if (k == ticks) "now" else points[idx].at?.let { relativeTime(it) }.orEmpty()
+                if (label.isEmpty()) continue
+                val tw = font.width(label)
+                val tx = when (k) {
+                    0 -> plotL
+                    ticks -> plotR - tw
+                    else -> (px(idx) - tw / 2).coerceIn(plotL, plotR - tw)
+                }
+                g.text(font, "§8$label", tx, plotB + 1, TEXT_FAINT)
+                g.fill(px(idx), plotB, px(idx) + 1, plotB + 2, 0x30FFFFFF) // tick mark
+            }
+        } else {
+            points.first().at?.let {
+                val ago = relativeTime(it)
+                if (ago.isNotEmpty()) g.text(font, "§8$ago", plotL, plotB + 1, TEXT_FAINT)
+            }
+            g.text(font, "§8now", plotR - font.width("now"), plotB + 1, TEXT_FAINT)
         }
-        g.text(font, "§8now", plotR - font.width("now"), plotB + 1, TEXT_FAINT)
 
-        // Hover readout: snap to the nearest sample, guide line + ringed point +
-        // a boxed tooltip with MMR, per-match delta and age.
+        // Hover readout: snap to the nearest sample, crosshair guides + ringed
+        // point + a boxed tooltip with MMR, per-match delta and age.
         if (mouseX in plotL..plotR && mouseY in y..(y + height)) {
             val frac = (mouseX - plotL).toFloat() / plotW.coerceAtLeast(1)
             val i = Math.round(frac * (n - 1)).coerceIn(0, n - 1)
@@ -553,6 +634,9 @@ object Ui {
             // vertical guide
             var vy = plotT
             while (vy < plotB) { g.fill(hx, vy, hx + 1, vy + 2, 0x40FFFFFF); vy += 4 }
+            // horizontal guide at the point's value
+            var hxg = plotL
+            while (hxg < plotR) { g.fill(hxg, hy, hxg + 2, hy + 1, 0x30FFFFFF); hxg += 4 }
             // ring around the point
             g.fill(hx - 2, hy - 2, hx + 3, hy - 1, WHITE)
             g.fill(hx - 2, hy + 2, hx + 3, hy + 3, WHITE)

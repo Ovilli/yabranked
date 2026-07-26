@@ -1,13 +1,13 @@
 package dev.yabranked.backend.mock
 
-import dev.yabranked.backend.api.SessionRequest
-import dev.yabranked.backend.api.SessionResponse
 import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchResultReport
 import dev.yabranked.proto.MatchTeam
 import dev.yabranked.proto.QueueClientMessage
 import dev.yabranked.proto.QueueServerMessage
+import dev.yabranked.proto.SessionRequest
+import dev.yabranked.proto.SessionResponse
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.cio.CIO

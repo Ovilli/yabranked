@@ -68,4 +68,48 @@ class EloRatingSystemTest {
         assertEquals(11, update.playerA.matchesPlayed)
         assertEquals(11, update.playerB.matchesPlayed)
     }
+
+    /** Net rating the ladder gained (or lost) across one settle. */
+    private fun exchange(a: RatingState, b: RatingState, outcome: MatchOutcome): Int {
+        val update = elo.update(a, b, outcome)
+        return (update.playerA.rating - a.rating) + (update.playerB.rating - b.rating)
+    }
+
+    @Test
+    fun `between two placed players the exchange is conserved`() {
+        // rounding each delta independently minted or burned a point on every
+        // half-value swing, so the ladder's total drifted with every match
+        for (outcome in listOf(MatchOutcome.TEAM_A_WIN, MatchOutcome.TEAM_B_WIN, MatchOutcome.DRAW)) {
+            for (gap in listOf(0, 37, 111, 250, 419)) {
+                assertEquals(
+                    0,
+                    exchange(placed(1500), placed(1500 - gap), outcome),
+                    "$outcome at a $gap gap moved the ladder's total rating",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the winner gains exactly what the loser gives up`() {
+        val a = placed(1600)
+        val b = placed(1450)
+
+        val update = elo.update(a, b, MatchOutcome.TEAM_A_WIN)
+
+        assertEquals(update.playerA.rating - a.rating, -(update.playerB.rating - b.rating))
+    }
+
+    @Test
+    fun `a mixed placement match breaks conservation deliberately and boundedly`() {
+        // charging a settled opponent for a placement player's fast convergence
+        // would make drawing one a coin flip on 80 points, so the surplus is
+        // minted knowingly — and only for a player's first few matches a season
+        val placementPlayer = RatingState(1000, matchesPlayed = 0)
+        val established = placed(1000)
+
+        val net = exchange(placementPlayer, established, MatchOutcome.TEAM_A_WIN)
+
+        assertEquals(24, net, "placement gains 40 while the opponent pays 16")
+    }
 }

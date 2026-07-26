@@ -1,6 +1,7 @@
 package dev.yabranked.backend.api
 
 import dev.yabranked.backend.auth.FakeSessionVerifier
+import dev.yabranked.proto.SessionRequest
 import dev.yabranked.backend.match.MatchService
 import dev.yabranked.backend.queue.MatchmakingQueue
 import dev.yabranked.backend.queue.QueueService

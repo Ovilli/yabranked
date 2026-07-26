@@ -1,3 +1,6 @@
 {
-  "key.yabranked.open": "Open Ranked Menu"
+  "key.yabranked.open": "Open Ranked Menu",
+  "key.yabranked.join": "Join Queue",
+  "key.yabranked.leave": "Leave Queue",
+  "key.yabranked.history": "Open Match History"
 }

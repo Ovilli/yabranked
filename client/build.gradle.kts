@@ -31,6 +31,16 @@ loom {
     }
 }
 
+// Proto classes are flattened into the mod jar (below) rather than nested as a
+// jar-in-jar: Fabric's JiJ only loads nested jars that are themselves mods, and
+// proto is a plain library. Flattening keeps its classes on the runtime
+// classpath without giving proto a fabric.mod.json.
+val bundledProto: Configuration by configurations.creating {
+    isTransitive = false // only proto's own classes; kotlinx-serialization comes from FLK
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
 dependencies {
     // Minecraft 26.x ships unobfuscated — no mappings dependency needed
     minecraft("com.mojang:minecraft:26.2")
@@ -39,6 +49,14 @@ dependencies {
     implementation("net.fabricmc.fabric-api:fabric-api:0.152.1+26.2")
     // provides kotlin stdlib + kotlinx-serialization at runtime
     implementation("net.fabricmc:fabric-language-kotlin:1.13.11+kotlin.2.3.21")
+
+    // shared wire model — compile against it and bundle its classes (see above)
+    implementation(project(":proto"))
+    bundledProto(project(":proto"))
+}
+
+tasks.named<Jar>("jar") {
+    from(bundledProto.elements.map { jars -> jars.map { zipTree(it) } })
 }
 
 tasks.processResources {

@@ -4,14 +4,32 @@ import dev.yabranked.backend.api.ApiDependencies
 import dev.yabranked.backend.api.rankedApi
 import dev.yabranked.backend.auth.FakeSessionVerifier
 import dev.yabranked.backend.auth.MojangSessionVerifier
+import dev.yabranked.backend.config.BackendConfig
+import dev.yabranked.backend.config.ConfigException
 import dev.yabranked.backend.match.MatchService
+import dev.yabranked.backend.ops.GracefulShutdown
+import dev.yabranked.backend.ops.Metrics
+import dev.yabranked.backend.ops.ReadinessChecks
+import dev.yabranked.backend.ops.databaseProbe
+import dev.yabranked.backend.ops.healthRoutes
+import dev.yabranked.backend.ops.metricsRoutes
+import dev.yabranked.backend.ops.requestLogging
+import dev.yabranked.backend.orchestrator.ContainerLimits
 import dev.yabranked.backend.orchestrator.DockerCliRuntime
 import dev.yabranked.backend.orchestrator.MatchOrchestrator
 import dev.yabranked.backend.orchestrator.OrchestratorConfig
 import dev.yabranked.backend.queue.MatchmakingQueue
+import dev.yabranked.backend.rating.DecaySweep
+import dev.yabranked.backend.season.SeasonRollover
 import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.Database
+import dev.yabranked.backend.store.AchievementStore
+import dev.yabranked.backend.store.InMemoryAchievementStore
 import dev.yabranked.backend.store.InMemoryReportStore
+import dev.yabranked.backend.store.LockingTransactionRunner
+import dev.yabranked.backend.store.PostgresAchievementStore
+import dev.yabranked.backend.store.PostgresTransactionRunner
+import dev.yabranked.backend.store.TransactionRunner
 import dev.yabranked.backend.store.MatchStore
 import dev.yabranked.backend.store.PlayerStore
 import dev.yabranked.backend.store.PostgresMatchStore
@@ -19,6 +37,7 @@ import dev.yabranked.backend.store.PostgresPlayerStore
 import dev.yabranked.backend.store.PostgresReportStore
 import dev.yabranked.backend.store.PostgresSettingsStore
 import dev.yabranked.backend.store.ReportStore
+import dev.yabranked.backend.store.StoreDispatchers
 import dev.yabranked.backend.queue.QueueService
 import dev.yabranked.backend.rating.EloRatingSystem
 import dev.yabranked.backend.store.InMemoryMatchStore
@@ -27,39 +46,76 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import kotlinx.coroutines.CoroutineDispatcher
 import org.slf4j.LoggerFactory
 
 fun main(args: Array<String>) {
     val log = LoggerFactory.getLogger("yabranked")
 
-    val port = System.getenv("YABRANKED_PORT")?.toIntOrNull() ?: 8080
-    // --fake-auth: accept any username without Mojang verification (local dev / mock client)
-    val fakeAuth = "--fake-auth" in args || System.getenv("YABRANKED_FAKE_AUTH") == "1"
+    // Everything is parsed and validated here, before anything is opened: a bad
+    // value should stop the process, not surface as a mystery three hours in.
+    val config = try {
+        BackendConfig.fromEnv(args)
+    } catch (e: ConfigException) {
+        log.error("invalid configuration: {}", e.message)
+        kotlin.system.exitProcess(1)
+    }
 
-    // Postgres when YABRANKED_DATABASE_URL is set; in-memory otherwise (local dev).
-    val databaseUrl = System.getenv("YABRANKED_DATABASE_URL")
-    val envSeason = System.getenv("YABRANKED_SEASON")?.toIntOrNull()
+    // Fake auth mints a session for any username and opens the debug endpoint
+    // that hands out match server tokens. Pointed at a real database that is
+    // account takeover for every player on the ladder, so refuse the pair
+    // unless someone says out loud that the database is disposable.
+    if (config.fakeAuth && config.usesPostgres &&
+        System.getenv("YABRANKED_ALLOW_FAKE_AUTH_WITH_DATABASE") != "1"
+    ) {
+        log.error(
+            "refusing to start: fake auth against a database lets anyone sign in as anyone. " +
+                "Drop YABRANKED_FAKE_AUTH/--fake-auth, or set " +
+                "YABRANKED_ALLOW_FAKE_AUTH_WITH_DATABASE=1 if this database is throwaway."
+        )
+        kotlin.system.exitProcess(1)
+    }
+
+    val shutdown = GracefulShutdown()
+    val metrics = Metrics()
 
     val players: PlayerStore
     val matches: MatchStore
     val reports: ReportStore
+    val achievements: AchievementStore
     val seasons: SeasonService
+    val transactions: TransactionRunner
+    // Store calls are blocking JDBC; handlers hop here instead of running them
+    // on Ktor's event loop. Bounded by the pool: queueing beyond it would only
+    // move the wait inside Hikari.
+    val storeDispatcher: CoroutineDispatcher
+    // null on in-memory stores — readiness has no database to probe.
+    var database: Database? = null
 
-    if (databaseUrl != null) {
+    if (config.databaseUrl != null) {
         val db = Database(
-            url = databaseUrl,
-            user = System.getenv("YABRANKED_DATABASE_USER"),
-            password = System.getenv("YABRANKED_DATABASE_PASSWORD"),
+            url = config.databaseUrl,
+            user = config.databaseUser,
+            password = config.databasePassword,
+            poolSize = config.dbPoolSize,
+            connectionTimeoutMs = config.dbConnectionTimeoutMs,
         )
+        database = db
         db.migrate()
-        log.info("using Postgres at {}", databaseUrl.substringBefore('?'))
+        storeDispatcher = StoreDispatchers.bounded(config.dbPoolSize)
+        log.info(
+            "using Postgres at {} (pool size {})",
+            config.databaseUrl.substringBefore('?'), config.dbPoolSize,
+        )
 
         val settings = PostgresSettingsStore(db)
         players = PostgresPlayerStore(db)
         matches = PostgresMatchStore(db)
         reports = PostgresReportStore(db)
+        achievements = PostgresAchievementStore(db)
+        transactions = PostgresTransactionRunner(db)
         seasons = SeasonService(
-            initialSeason = envSeason
+            initialSeason = config.season
                 ?: settings.get("current_season")?.toIntOrNull()
                 ?: 1,
             onChange = { settings.put("current_season", it.toString()) },
@@ -71,28 +127,40 @@ fun main(args: Array<String>) {
         players = InMemoryPlayerStore()
         matches = InMemoryMatchStore()
         reports = InMemoryReportStore()
-        seasons = SeasonService(envSeason ?: 1)
+        achievements = InMemoryAchievementStore()
+        transactions = LockingTransactionRunner()
+        seasons = SeasonService(config.season ?: 1)
+        storeDispatcher = StoreDispatchers.default
     }
 
     // Dev fixture: a fake competitive scene so the ranked UI can be reviewed
     // without playing real matches. In-memory only, to never touch a real DB.
-    if (System.getenv("YABRANKED_SEED") == "1") {
-        if (databaseUrl != null) {
+    if (config.seed) {
+        if (config.usesPostgres) {
             log.warn("YABRANKED_SEED ignored: refusing to seed a Postgres database")
         } else {
             dev.yabranked.backend.dev.Seeder.seed(
                 players, matches, seasons.currentSeason,
-                selfName = System.getenv("YABRANKED_SEED_ME"),
+                selfName = config.seedMe,
+                achievements = achievements,
             )
             log.warn("seeded in-memory stores with fixture leaderboard/match data (YABRANKED_SEED=1)")
         }
     }
 
     val rating = EloRatingSystem()
-    val matchService = MatchService(players, matches, rating, seasons)
-    val queueService = QueueService(MatchmakingQueue(), matchService)
+    val matchService = MatchService(
+        players, matches, rating, seasons,
+        achievements = achievements,
+        transactions = transactions,
+    )
+    val queueService = QueueService(
+        MatchmakingQueue(), matchService,
+        storeDispatcher = storeDispatcher,
+        metrics = metrics,
+    )
 
-    val verifier = if (fakeAuth) {
+    val verifier = if (config.fakeAuth) {
         log.warn("!! fake auth enabled — do not expose this instance publicly")
         FakeSessionVerifier()
     } else {
@@ -100,37 +168,35 @@ fun main(args: Array<String>) {
     }
 
     matchService.onMatchCreated { record ->
+        metrics.matchCreated()
         log.info(
             "match created: {} ({} vs {}) worldSeed={} cardSeed={}",
             record.id, record.playerA, record.playerB,
             record.settings.worldSeed, record.settings.cardSeed,
         )
     }
+    matchService.onMatchSettled { record -> metrics.matchSettled(record.outcome) }
 
     // Orchestration: provision one Docker match server per match.
     // Without it (local dev), matches are marked active immediately with a
     // placeholder address so the queue flow stays testable.
-    val orchestrate = System.getenv("YABRANKED_ORCHESTRATE") == "1"
-    val orchestrator = if (orchestrate) {
+    val orchestrator = if (config.orchestrate) {
         MatchOrchestrator(
             config = OrchestratorConfig(
-                image = System.getenv("YABRANKED_MATCH_IMAGE") ?: "yabranked-match:latest",
-                publicHost = System.getenv("YABRANKED_PUBLIC_HOST") ?: "localhost",
-                backendUrlForAgents = System.getenv("YABRANKED_BACKEND_URL_FOR_AGENTS")
-                    ?: if (System.getenv("YABRANKED_HOST_NETWORK") == "false") {
-                        "http://host.docker.internal:$port"
-                    } else {
-                        "http://localhost:$port"
-                    },
-                onlineMode = System.getenv("YABRANKED_ONLINE_MODE") != "false",
-                hostNetwork = System.getenv("YABRANKED_HOST_NETWORK") != "false",
-                noShowTimeoutSeconds = System.getenv("YABRANKED_NO_SHOW_TIMEOUT_SECONDS")?.toLongOrNull(),
-                postgameSeconds = System.getenv("YABRANKED_POSTGAME_SECONDS")?.toLongOrNull(),
+                image = config.matchImage,
+                publicHost = config.publicHost,
+                backendUrlForAgents = config.backendUrlForAgents,
+                onlineMode = config.onlineMode,
+                hostNetwork = config.hostNetwork,
+                limits = ContainerLimits(memory = config.matchMemory, cpus = config.matchCpus),
+                noShowTimeoutSeconds = config.noShowTimeoutSeconds,
+                postgameSeconds = config.postgameSeconds,
             ),
             runtime = DockerCliRuntime(),
             matchService = matchService,
             matches = matches,
             players = players,
+            metrics = metrics,
         )
     } else {
         log.warn("orchestration disabled (set YABRANKED_ORCHESTRATE=1); matches get placeholder servers")
@@ -141,9 +207,26 @@ fun main(args: Array<String>) {
         null
     }
 
-    embeddedServer(Netty, port = port) {
+    // Clear anything the previous process left behind before taking new matches.
+    orchestrator?.reconcile()
+
+    val readiness = ReadinessChecks(
+        matchmakingRunning = { queueService.isRunning },
+        draining = { shutdown.isDraining },
+        databaseReachable = database?.let { databaseProbe(it.dataSource) },
+    )
+
+    // Keeps the visible top of the ladder honest: without it an inactive
+    // top-ten player holds their rank by never queueing again.
+    val decaySweep = DecaySweep(players, seasons, rating)
+
+    val server = embeddedServer(Netty, port = config.port) {
         queueService.start(this)
+        decaySweep.start(this)
         orchestrator?.start(this)
+        requestLogging()
+        metricsRoutes(metrics)
+        healthRoutes(readiness)
         rankedApi(
             ApiDependencies(
                 verifier = verifier,
@@ -151,12 +234,31 @@ fun main(args: Array<String>) {
                 matches = matches,
                 matchService = matchService,
                 queueService = queueService,
-                debugEndpoints = fakeAuth,
-                minClientVersion = System.getenv("YABRANKED_MIN_CLIENT_VERSION"),
+                debugEndpoints = config.fakeAuth,
+                minClientVersion = config.minClientVersion,
                 seasons = seasons,
                 reports = reports,
-                adminToken = System.getenv("YABRANKED_ADMIN_TOKEN"),
+                achievements = achievements,
+                adminToken = config.adminToken,
+                rollover = SeasonRollover(players, rating),
+                storeDispatcher = storeDispatcher,
             )
         )
-    }.start(wait = true)
+    }
+
+    // Order matters: stop matching before anyone is told anything, let readiness
+    // go red so traffic drains away, and only then close what holds resources.
+    shutdown.step("matchmaking") { queueService.stop() }
+    shutdown.step("decay") { decaySweep.stop() }
+    shutdown.step("http") {
+        server.stop(gracePeriodMillis = config.shutdownGraceSeconds * 1000, timeoutMillis = config.shutdownGraceSeconds * 1000)
+    }
+    shutdown.step("metrics") { metrics.close() }
+    shutdown.step("database") { database?.close() }
+    shutdown.installHook()
+
+    server.start(wait = true)
+    // A normal `stop` (rather than SIGTERM) still has to release the pool.
+    // Idempotent, so racing the hook is harmless.
+    shutdown.drain()
 }

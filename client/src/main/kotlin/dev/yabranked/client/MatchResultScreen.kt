@@ -1,5 +1,7 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
@@ -16,13 +18,20 @@ import org.lwjgl.glfw.GLFW
  * player happened to reopen the ranked menu.
  */
 class MatchResultScreen(
-    private val entry: WireHistoryEntry,
-    private val profileBefore: WireProfile?,
-    private val profileAfter: WireProfile,
+    private val entry: MatchHistoryEntry,
+    private val profileBefore: PlayerProfile?,
+    private val profileAfter: PlayerProfile,
 ) : Screen(Component.literal("Match Result")) {
 
-    private val promoted =
-        profileBefore != null && profileBefore.tier != profileAfter.tier && profileAfter.rank != null
+    /** Metal-band ordinal of a tier; -1 for Unranked. Division changes within a
+     *  band do not count as a promotion/demotion. */
+    private fun band(tier: String): Int = when (tier.substringBefore(' ')) {
+        "Coal" -> 0; "Iron" -> 1; "Gold" -> 2; "Emerald" -> 3; "Diamond" -> 4; "Netherite" -> 5
+        else -> -1
+    }
+
+    private val promoted = profileBefore != null && band(profileAfter.tier) > band(profileBefore.tier)
+    private val demoted = profileBefore != null && band(profileAfter.tier) < band(profileBefore.tier)
 
     /** Ticks since open, used to count the rating up rather than snapping. */
     private var ticks = 0
@@ -165,6 +174,7 @@ class MatchResultScreen(
         val infoY = top + CARD_HEIGHT + 12
         when {
             promoted && profileBefore != null -> drawRankUp(g, centerX, infoY, profileBefore, profileAfter)
+            demoted && profileBefore != null -> drawRankDown(g, centerX, infoY, profileBefore, profileAfter)
             profileAfter.placementMatchesRemaining > 0 -> {
                 g.centeredText(
                     font,
@@ -192,7 +202,7 @@ class MatchResultScreen(
      * then the tier transition reads underneath. Driven by [ticks] so it plays
      * once when the screen opens.
      */
-    private fun drawRankUp(g: GuiGraphicsExtractor, centerX: Int, y: Int, before: WireProfile, after: WireProfile) {
+    private fun drawRankUp(g: GuiGraphicsExtractor, centerX: Int, y: Int, before: PlayerProfile, after: PlayerProfile) {
         val prog = (ticks / 10f).coerceIn(0f, 1f)
         val ease = 1f - (1f - prog) * (1f - prog) // easeOutQuad
         val size = (10 + 22 * ease).toInt()
@@ -202,6 +212,13 @@ class MatchResultScreen(
         Ui.rankBadge(g, crestX, y, after.tier, size)
         g.centeredText(font, "§lTIER UP!", centerX, y + size + 4, Ui.ACCENT)
         g.centeredText(font, "${before.tier} → ${after.tier}", centerX, y + size + 16, Ui.TEXT_DIM)
+    }
+
+    /** Demotion counterpart: the new (lower) crest, no celebratory glow, red note. */
+    private fun drawRankDown(g: GuiGraphicsExtractor, centerX: Int, y: Int, before: PlayerProfile, after: PlayerProfile) {
+        Ui.rankBadge(g, centerX - 12, y, after.tier, 24)
+        g.centeredText(font, "§lTIER LOST", centerX, y + 28, Ui.LOSS)
+        g.centeredText(font, "${before.tier} → ${after.tier}", centerX, y + 40, Ui.TEXT_DIM)
     }
 
     override fun onClose() {

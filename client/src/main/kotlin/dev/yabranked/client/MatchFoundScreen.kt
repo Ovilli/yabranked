@@ -1,5 +1,7 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.Minecraft
@@ -21,12 +23,12 @@ import net.minecraft.sounds.SoundEvents
  */
 class MatchFoundScreen(
     private val parent: Screen?,
-    private val match: WireQueueServerMessage.MatchFound,
+    private val match: QueueServerMessage.MatchFound,
 ) : Screen(Component.literal("Match Found")) {
 
     private var ticksLeft = COUNTDOWN_TICKS
     private var connecting = false
-    private var versus: WireVersusRecord? = null
+    private var versus: VersusRecord? = null
     private var lastBeepSecond = -1
 
     /** Wall-clock at first render, so the screen fades in from black. */
@@ -182,7 +184,10 @@ class MatchFoundScreen(
         g.centeredText(font, name, centerX, nameY, if (isSelf) Ui.ACCENT else Ui.WHITE)
         Ui.rankBadge(g, centerX - 8, y + 17 + HEAD + 14, tier)
         g.centeredText(font, tier, centerX, y + 17 + HEAD + 34, tierColor)
-        val hideRating = if (isSelf) RankedState.hideElo else RankedState.hideOpponentElo
+        // rating <= 0 on the opponent means the server redacted it (they hide
+        // their MMR); a real rating never sits at zero. Honour that on top of the
+        // viewer's own "hide opponent MMR" display preference.
+        val hideRating = if (isSelf) RankedState.hideElo else (RankedState.hideOpponentElo || rating <= 0)
         val ratingText = if (hideRating) "§7MMR hidden" else "$rating MMR"
         g.centeredText(font, ratingText, centerX, y + 17 + HEAD + 46, Ui.TEXT_DIM)
     }

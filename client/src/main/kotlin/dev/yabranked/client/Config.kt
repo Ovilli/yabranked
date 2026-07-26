@@ -22,6 +22,8 @@ object Config {
             RankedState.hideOwnFlag = p.getProperty("hideOwnFlag", "false").toBoolean()
             RankedState.hideElo = p.getProperty("hideElo", "false").toBoolean()
             RankedState.hideOpponentElo = p.getProperty("hideOpponentElo", "false").toBoolean()
+            RankedState.colorblind = p.getProperty("colorblind", "false").toBoolean()
+            dev.yabranked.client.ui.Ui.colorblindPalette = RankedState.colorblind
         } catch (e: Exception) {
             log.warn("failed to load options; using defaults", e)
         }
@@ -34,6 +36,7 @@ object Config {
             p.setProperty("hideOwnFlag", RankedState.hideOwnFlag.toString())
             p.setProperty("hideElo", RankedState.hideElo.toString())
             p.setProperty("hideOpponentElo", RankedState.hideOpponentElo.toString())
+            p.setProperty("colorblind", RankedState.colorblind.toString())
             file.parentFile?.mkdirs()
             file.outputStream().use { p.store(it, "YAB Ranked client options") }
         } catch (e: Exception) {

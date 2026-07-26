@@ -26,6 +26,8 @@ class CountryPickerScreen(
 
     private fun matches(): List<String> = CountryData.search(search?.value.orEmpty())
 
+    private val opened = FirstInit()
+
     override fun init() {
         val centerX = width / 2
         val left = centerX - WIDTH / 2
@@ -44,7 +46,7 @@ class CountryPickerScreen(
         addRenderableWidget(
             RankedButton(centerX - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
         )
-        Sfx.open()
+        opened.once { Sfx.open() }
     }
 
     private fun choose(code: String?) {

@@ -14,6 +14,22 @@ WORKDIR /server
 ADD https://meta.fabricmc.net/v2/versions/loader/${MINECRAFT_VERSION}/${FABRIC_LOADER_VERSION}/${FABRIC_INSTALLER_VERSION}/server/jar \
     /server/fabric-server.jar
 
+# Pre-fetch the Minecraft server jar and every library into the image.
+#
+# fabric-server.jar is only a launcher: left to itself it resolves and
+# downloads all of that on first *run*, i.e. once per match container, which
+# added minutes to provisioning and regularly blew past the orchestrator's
+# ready timeout (MatchService.PROVISION_TIMEOUT_SECONDS) — the match was voided
+# before the server ever finished booting.
+#
+# Running it with eula=false is what makes this download-only: the launcher
+# fetches everything, hands off to the server, and the server exits on the
+# unaccepted EULA before generating a world. The non-zero exit is expected.
+RUN echo "eula=false" > eula.txt && \
+    (java -jar fabric-server.jar nogui || true) && \
+    rm -f eula.txt server.properties && \
+    test -d libraries || (echo "pre-fetch produced no libraries/ — launcher layout changed" && exit 1)
+
 COPY mods/ /server/mods/
 COPY entrypoint.sh /server/entrypoint.sh
 RUN chmod +x /server/entrypoint.sh

@@ -1,5 +1,11 @@
 -- YAB Ranked Postgres schema (target for the Postgres store; the service
 -- currently runs on in-memory implementations of the same interfaces).
+--
+-- This file is migration 1, the baseline: it creates the schema on an empty
+-- database and is never re-run on one that already has it (see
+-- store/Migrations.kt). New columns therefore go in a new
+-- resources/migrations/V<n>__<name>.sql plus an entry in SchemaMigrator.ALL —
+-- editing this file only affects databases created from scratch afterwards.
 
 CREATE TABLE IF NOT EXISTS players (
     uuid            uuid PRIMARY KEY,
@@ -7,7 +13,9 @@ CREATE TABLE IF NOT EXISTS players (
     banned_at       timestamptz,
     created_at      timestamptz NOT NULL DEFAULT now(),
     country         text,
-    background      text NOT NULL DEFAULT 'default'
+    background      text NOT NULL DEFAULT 'default',
+    hide_flag       boolean NOT NULL DEFAULT false,
+    hide_rating     boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS season_stats (
@@ -20,6 +28,7 @@ CREATE TABLE IF NOT EXISTS season_stats (
     draws            integer NOT NULL DEFAULT 0,
     playtime_seconds bigint NOT NULL DEFAULT 0,
     forfeits         integer NOT NULL DEFAULT 0,
+    peak_rating      integer NOT NULL DEFAULT 0,
     PRIMARY KEY (uuid, season)
 );
 
@@ -58,6 +67,14 @@ CREATE TABLE IF NOT EXISTS reports (
     UNIQUE (match_id, reporter)
 );
 
+-- unlocked achievement milestones; achievement_id is a stable catalog string
+CREATE TABLE IF NOT EXISTS player_achievements (
+    uuid            uuid NOT NULL REFERENCES players (uuid),
+    achievement_id  text NOT NULL,
+    earned_at       timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (uuid, achievement_id)
+);
+
 CREATE INDEX IF NOT EXISTS matches_player_a_idx ON matches (player_a, season, created_at DESC);
 CREATE INDEX IF NOT EXISTS matches_player_b_idx ON matches (player_b, season, created_at DESC);
 CREATE INDEX IF NOT EXISTS season_stats_rating_idx ON season_stats (season, rating DESC);
@@ -73,8 +90,11 @@ CREATE TABLE IF NOT EXISTS settings (
 -- newer columns here. ADD COLUMN IF NOT EXISTS is a no-op on fresh schemas.
 ALTER TABLE players ADD COLUMN IF NOT EXISTS country text;
 ALTER TABLE players ADD COLUMN IF NOT EXISTS background text NOT NULL DEFAULT 'default';
+ALTER TABLE players ADD COLUMN IF NOT EXISTS hide_flag boolean NOT NULL DEFAULT false;
+ALTER TABLE players ADD COLUMN IF NOT EXISTS hide_rating boolean NOT NULL DEFAULT false;
 
 ALTER TABLE season_stats ADD COLUMN IF NOT EXISTS playtime_seconds bigint NOT NULL DEFAULT 0;
 ALTER TABLE season_stats ADD COLUMN IF NOT EXISTS forfeits integer NOT NULL DEFAULT 0;
+ALTER TABLE season_stats ADD COLUMN IF NOT EXISTS peak_rating integer NOT NULL DEFAULT 0;
 
 ALTER TABLE matches ADD COLUMN IF NOT EXISTS forfeited_by uuid;

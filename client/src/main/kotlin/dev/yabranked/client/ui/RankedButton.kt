@@ -42,6 +42,10 @@ class RankedButton(
         // A lighter grey plate than the near-black cards, so buttons read as
         // interactive instead of blending into the panels. Gold border on hover.
         val hovered = isHovered && active
+        // Keyboard and controller navigation gets the same lit plate as the
+        // mouse, plus a ring — without it the selection was simply invisible.
+        val focused = isFocused && active
+        val lit = hovered || focused
         // Soft tick the moment the cursor lands on the button (mcsr-style),
         // quieter and higher-pitched than the click so it reads as a hover cue.
         if (hovered && !wasHovered) {
@@ -51,11 +55,12 @@ class RankedButton(
         wasHovered = hovered
         val body = when {
             !active -> 0xFF262626.toInt()
-            hovered -> 0xFF4A4A4A.toInt()
+            lit -> 0xFF4A4A4A.toInt()
             else -> 0xFF343434.toInt()
         }
-        val border = if (hovered) Ui.ACCENT else 0xFF5A5A5A.toInt()
+        val border = if (lit) Ui.ACCENT else 0xFF5A5A5A.toInt()
 
+        if (focused) Ui.focusRing(g, x, y, width, height)
         g.fill(x, y, x + width, y + height, border)
         g.fill(x + 1, y + 1, x + width - 1, y + height - 1, body)
         // thin top sheen to give the plate a little depth
@@ -64,13 +69,21 @@ class RankedButton(
         val font = Minecraft.getInstance().font
         // §-codes in the label survive .string, so coloured labels still render;
         // a disabled button is dimmed instead of swapping colour.
-        val text = message.string
+        // Clamp to the plate: long labels (e.g. a country name) get an ellipsis
+        // instead of bleeding past the border. Icon buttons lose the icon gutter.
+        val textPad = if (icon != null) 18 else 6
+        val maxTextW = width - textPad
+        var text = message.string
+        if (font.width(text) > maxTextW) {
+            val ellipsis = "…"
+            text = font.plainSubstrByWidth(text, maxTextW - font.width(ellipsis)) + ellipsis
+        }
         // Content tracks the plate: brightens to full white on hover, sits at a
         // soft off-white at rest, dims when disabled. This is the "icon gets
         // lighter on hover" cue — the tint multiplies the icon glyph too.
         val color = when {
             !active -> Ui.TEXT_FAINT
-            hovered -> Ui.WHITE
+            lit -> Ui.WHITE
             else -> Ui.TEXT_SOFT
         }
 

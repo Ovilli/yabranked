@@ -1,5 +1,7 @@
 package dev.yabranked.client
 
+import dev.yabranked.proto.*
+
 import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -17,7 +19,7 @@ class LeaderboardScreen(
     private val parent: Screen?,
 ) : Screen(Component.literal("Leaderboard")) {
 
-    private var entries: List<WireProfile>? = null
+    private var entries: List<PlayerProfile>? = null
     private var error: String? = null
 
     // Season being viewed; -1 until resolved from the backend / profile.
@@ -27,6 +29,7 @@ class LeaderboardScreen(
     private var nextButton: RankedButton? = null
     private var search: EditBox? = null
     private var sortButton: RankedButton? = null
+    private var filterButton: RankedButton? = null
 
     /** 0 = MMR (backend order), 1 = win rate, 2 = games played. */
     private var sortMode = 0
@@ -37,8 +40,8 @@ class LeaderboardScreen(
     /** Keyboard-selected row index into [rows]; -1 when nothing is selected. */
     private var selected = -1
 
-    private fun games(p: WireProfile) = p.wins + p.losses + p.draws
-    private fun winRate(p: WireProfile): Double {
+    private fun games(p: PlayerProfile) = p.wins + p.losses + p.draws
+    private fun winRate(p: PlayerProfile): Double {
         val decided = p.wins + p.losses
         return if (decided == 0) 0.0 else p.wins.toDouble() / decided
     }
@@ -49,14 +52,22 @@ class LeaderboardScreen(
         else -> "Sort: MMR"
     }
 
-    /** Rows after search + sort. Each keeps its true MMR rank (from the backend
-     *  order) so the position number and podium medals stay meaningful even when
-     *  the list is re-sorted by another column. */
-    private fun rows(): List<Pair<Int, WireProfile>> {
+    /** Tier filter cycle: null = all, else a metal band (matched by tier prefix). */
+    private val tierCycle = listOf<String?>(null, "Netherite", "Diamond", "Emerald", "Gold", "Iron", "Coal")
+    private var tierIndex = 0
+    private fun tierFilter() = tierCycle[tierIndex]
+    private fun filterLabel() = "Tier: ${tierFilter() ?: "All"}"
+
+    /** Rows after search + tier filter + sort. Each keeps its true MMR rank (from
+     *  the backend order) so the position number and podium medals stay meaningful
+     *  even when the list is re-sorted or filtered. */
+    private fun rows(): List<Pair<Int, PlayerProfile>> {
         val list = entries ?: return emptyList()
         val q = search?.value?.trim().orEmpty()
+        val tier = tierFilter()
         val base = list.mapIndexed { i, p -> (i + 1) to p }
             .filter { q.isEmpty() || it.second.name.contains(q, ignoreCase = true) }
+            .filter { tier == null || it.second.tier.substringBefore(' ') == tier }
         return when (sortMode) {
             1 -> base.sortedByDescending { winRate(it.second) }
             2 -> base.sortedByDescending { games(it.second) }
@@ -64,8 +75,30 @@ class LeaderboardScreen(
         }
     }
 
+    /** Select the viewer's own row and scroll it into view. */
+    private fun jumpToMe() {
+        val me = RankedState.profile?.uuid ?: return
+        val idx = rows().indexOfFirst { it.second.uuid == me }
+        if (idx >= 0) {
+            selected = idx
+            ensureVisible()
+            Sfx.select()
+        } else {
+            Sfx.tick()
+        }
+    }
+
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
+
+    /** Bumped on every [load]. Non-zero means the ladder has already been asked
+     *  for, so the re-init a window resize triggers reuses what we have instead
+     *  of refetching 50 rows; a response whose id is stale is dropped rather
+     *  than overwriting the season the player has since paged to. */
+    private var loadId = 0
+
+    private val opened = FirstInit()
+    private val loaded = FirstInit()
 
     override fun init() {
         val centerX = width / 2
@@ -97,15 +130,32 @@ class LeaderboardScreen(
                 sortButton?.message = Component.literal(sortLabel())
             }
         )
+        // Tier filter (left of the season nav) and jump-to-me (right of it).
+        filterButton = addRenderableWidget(
+            RankedButton(centerX - 150, height - 52, 48, 20, Component.literal(filterLabel())) {
+                tierIndex = (tierIndex + 1) % tierCycle.size
+                scroll = 0
+                selected = -1
+                filterButton?.message = Component.literal(filterLabel())
+                Sfx.tick()
+            }
+        )
+        addRenderableWidget(
+            RankedButton(centerX + 102, height - 52, 48, 20, Component.literal("Me"), Ui.ICON_PLAY) { jumpToMe() }
+        )
 
-        Sfx.open()
+        opened.once { Sfx.open() }
 
         val backend = RankedState.backend
         if (backend == null) {
             error = "Not signed in"
             return
         }
-        load(backend)
+        // A window resize re-runs init() on this same instance; the ladder we
+        // already have is still good, so don't pull 50 rows again. Retrying a
+        // failed load here looked reasonable but fired once per frame of a
+        // resize drag — the season buttons are the deliberate way back.
+        loaded.once { load(backend) }
     }
 
     private fun changeSeason(delta: Int) {
@@ -113,21 +163,42 @@ class LeaderboardScreen(
         if (target == season) return
         season = target
         entries = null
-        error = null
         scroll = 0
         RankedState.backend?.let { load(it) }
         updateNavState()
     }
 
+    /**
+     * Fetch the ladder for the season the player is looking at.
+     *
+     * The two season fields are read by the render thread on every frame, so the
+     * worker reads copies taken here and hands its answers back through
+     * [net.minecraft.client.Minecraft.execute] rather than assigning them itself.
+     */
     private fun load(backend: BackendClient) {
         val minecraft = this.minecraft
+        val id = ++loadId
+        error = null
+        val requested = season
+        val knownCurrent = currentSeason
         YabRankedClient.workers.execute {
-            if (currentSeason < 0) currentSeason = backend.fetchCurrentSeason()
-            if (season < 0) season = currentSeason
-            val fetched = backend.fetchLeaderboard(limit = 50, season = season)
+            // A negative season means "not resolved yet" — ask which one is live.
+            val current = if (knownCurrent < 0) backend.fetchCurrentSeason() else knownCurrent
+            val target = if (requested < 0) current else requested
+            val fetched = backend.fetchLeaderboard(limit = 50, season = target)
             minecraft.execute {
-                entries = fetched
-                if (fetched.isEmpty()) error = "No rated players in season $season"
+                if (id != loadId) return@execute
+                currentSeason = current
+                season = target
+                when (fetched) {
+                    is BackendClient.Fetch.Ok -> {
+                        entries = fetched.value
+                        if (fetched.value.isEmpty()) error = "No rated players in season $target"
+                    }
+                    // Offline, an expired session and an outdated mod each need a
+                    // different move from the player, so name the one that hit.
+                    is BackendClient.Fetch.Error -> error = fetched.message
+                }
                 updateNavState()
             }
         }
@@ -227,7 +298,7 @@ class LeaderboardScreen(
         return super.keyPressed(event)
     }
 
-    private fun drawRow(g: GuiGraphicsExtractor, left: Int, y: Int, position: Int, profile: WireProfile, isSelf: Boolean, hovered: Boolean) {
+    private fun drawRow(g: GuiGraphicsExtractor, left: Int, y: Int, position: Int, profile: PlayerProfile, isSelf: Boolean, hovered: Boolean) {
         val tierColor = Ui.tierColor(profile.tier)
 
         // the viewer's own row is highlighted so it is findable at a glance

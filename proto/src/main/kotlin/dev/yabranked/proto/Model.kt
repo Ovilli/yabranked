@@ -90,6 +90,11 @@ data class PlayerRef(
     /** Mojang account UUID, dashed string form. */
     val uuid: String,
     val name: String,
+    /**
+     * ISO 3166-1 alpha-2 country code (lowercase), null if unset or hidden by
+     * the referenced player's flag-privacy setting.
+     */
+    val country: String? = null,
 )
 
 @Serializable
@@ -114,6 +119,16 @@ data class PlayerProfile(
     val playtimeSeconds: Long = 0,
     /** Matches this player forfeited (concede or no-show) this season. */
     val forfeits: Int = 0,
+    /** Highest rating reached this season (true peak, not a windowed estimate). */
+    val peakRating: Int? = null,
+    /**
+     * This player's privacy preferences, echoed back so their own client can
+     * restore the toggle state. On other players' public profiles these also
+     * signal that [country]/[rating] were redacted, so the viewer renders a
+     * placeholder instead of a stale value.
+     */
+    val hideFlag: Boolean = false,
+    val hideRating: Boolean = false,
 ) {
     val isPlaced: Boolean get() = placementMatchesRemaining <= 0
 }
@@ -123,6 +138,39 @@ data class PlayerProfile(
 data class ProfileUpdate(
     val country: String? = null,
     val background: String? = null,
+    /** Hide the country flag from other players. Null leaves it unchanged. */
+    val hideFlag: Boolean? = null,
+    /** Hide the exact rating on the public profile and match-found reveal. */
+    val hideRating: Boolean? = null,
+)
+
+/** Credentials a client presents to open a ranked session. */
+@Serializable
+data class SessionRequest(
+    val username: String,
+    val serverId: String,
+    val clientVersion: String? = null,
+)
+
+/** A minted session token plus the authenticated player's own profile. */
+@Serializable
+data class SessionResponse(
+    val token: String,
+    val profile: PlayerProfile,
+)
+
+/**
+ * A milestone a player has unlocked (first win, a rating tier, a win streak,
+ * playtime, …). Title and description come from the server's catalog so the
+ * client needs no local copy of the achievement definitions.
+ */
+@Serializable
+data class Achievement(
+    val id: String,
+    val title: String,
+    val description: String,
+    /** Epoch millis the milestone was first reached. */
+    val earnedAt: Long,
 )
 
 /** One row of a player's match history, from that player's perspective. */
@@ -134,9 +182,20 @@ data class MatchHistoryEntry(
     val result: String,
     val ratingBefore: Int,
     val ratingAfter: Int?,
+    /** Opponent's rating going into this match, for best-win / avg-opponent stats. */
+    val opponentRating: Int? = null,
     val durationSeconds: Long?,
     /** Epoch seconds of match completion (null if still running). */
     val completedAt: Long?,
+    /** Objective counts from this player's / the opponent's perspective. */
+    val yourScore: Int? = null,
+    val opponentScore: Int? = null,
+    /** Match world/card seeds, for the detail view. */
+    val worldSeed: Long? = null,
+    val cardSeed: Long? = null,
+    /** Whether the match ended on a forfeit, and whether this player was the one. */
+    val wasForfeit: Boolean = false,
+    val forfeitedByYou: Boolean = false,
 )
 
 @Serializable
@@ -240,6 +299,17 @@ sealed interface QueueServerMessage {
         val position: Int,
         val playersInQueue: Int,
         val waitedSeconds: Long,
+        /**
+         * The player has been paired and the match server is being provisioned
+         * — which takes up to a minute. Without this the client kept rendering
+         * the last "searching" state with a frozen timer for that whole window,
+         * because pairing dequeues the player and the state pushes stopped.
+         *
+         * A defaulted field rather than a new [QueueServerMessage] subtype: an
+         * unknown subtype name fails to decode outright on older clients, while
+         * an unknown field is ignored.
+         */
+        val preparingMatch: Boolean = false,
     ) : QueueServerMessage
 
     @Serializable

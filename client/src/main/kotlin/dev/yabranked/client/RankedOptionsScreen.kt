@@ -29,16 +29,23 @@ class RankedOptionsScreen(
         var button: RankedButton? = null
     }
 
+    private val opened = FirstInit()
+
     override fun init() {
         toggles.clear()
         toggles += Toggle("Country flags", { RankedState.showFlags }, { RankedState.showFlags = it },
             "Show country flags next to names.")
-        toggles += Toggle("Hide my flag", { RankedState.hideOwnFlag }, { RankedState.hideOwnFlag = it },
-            "Keep your own flag hidden from others' view of you.")
-        toggles += Toggle("Hide my MMR", { RankedState.hideElo }, { RankedState.hideElo = it },
-            "Hide your rating on your profile and results.")
+        toggles += Toggle("Hide my flag", { RankedState.hideOwnFlag }, {
+            RankedState.hideOwnFlag = it; pushPrivacy()
+        }, "Keep your flag hidden from other players' view of you.")
+        toggles += Toggle("Hide my MMR", { RankedState.hideElo }, {
+            RankedState.hideElo = it; pushPrivacy()
+        }, "Hide your exact rating on your public profile and match reveals.")
         toggles += Toggle("Hide opponent MMR", { RankedState.hideOpponentElo }, { RankedState.hideOpponentElo = it },
             "Hide the opponent's rating in match-found and the HUD.")
+        toggles += Toggle("Colourblind mode", { RankedState.colorblind },
+            { RankedState.colorblind = it; Ui.colorblindPalette = it },
+            "Blue/orange win-loss colours instead of green/red.")
 
         val centerX = width / 2
         var y = height / 2 - (toggles.size * ROW) / 2 - 4
@@ -54,21 +61,48 @@ class RankedOptionsScreen(
         }
 
         addRenderableWidget(
-            RankedButton(centerX - 120, y + 6, 240, 20, countryLabel(), Ui.ICON_GLOBE) {
+            RankedButton(centerX - 120, y + 6, 118, 20, countryLabel(), Ui.ICON_GLOBE) {
                 Config.save()
                 minecraft.setScreenAndShow(CountryPickerScreen(this))
             }
         )
         addRenderableWidget(
+            RankedButton(centerX + 2, y + 6, 118, 20, backgroundLabel()) {
+                Config.save()
+                minecraft.setScreenAndShow(BackgroundPickerScreen(this))
+            }
+        )
+        addRenderableWidget(
             RankedButton(centerX - 100, y + 32, 200, 20, Component.literal("Done")) { onClose() }
         )
-        Sfx.open()
+        opened.once { Sfx.open() }
+    }
+
+    /**
+     * Push the flag/rating privacy prefs to the backend so they actually apply
+     * to other players' views. These toggles are the only client-editable server
+     * state here, so unlike the purely local toggles they need a round-trip; the
+     * refreshed profile is cached back into [RankedState].
+     */
+    private fun pushPrivacy() {
+        val backend = RankedState.backend ?: return
+        val hideFlag = RankedState.hideOwnFlag
+        val hideRating = RankedState.hideElo
+        YabRankedClient.workers.execute {
+            val updated = backend.updateProfile(hideFlag = hideFlag, hideRating = hideRating)
+            if (updated != null) minecraft.execute { RankedState.profile = updated }
+        }
     }
 
     private fun countryLabel(): Component {
         val code = RankedState.profile?.country
         val value = if (code != null) CountryData.name(code) else "§7None"
-        return Component.literal("§fMy country: $value")
+        return Component.literal("§fCountry: $value")
+    }
+
+    private fun backgroundLabel(): Component {
+        val bg = RankedState.profile?.background ?: "default"
+        return Component.literal("§fCard: ${Backgrounds.label(bg)}")
     }
 
     private fun rowLabel(t: Toggle): Component {

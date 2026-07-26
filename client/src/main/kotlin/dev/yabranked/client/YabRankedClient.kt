@@ -4,6 +4,8 @@ import com.mojang.blaze3d.platform.InputConstants
 import dev.yabranked.client.ui.IconButton
 import dev.yabranked.client.ui.QueueBadge
 import dev.yabranked.client.ui.Ui
+import dev.yabranked.proto.MatchHistoryEntry
+import dev.yabranked.proto.PlayerProfile
 import net.fabricmc.api.ClientModInitializer
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper
@@ -22,6 +24,8 @@ import net.minecraft.resources.Identifier
 import org.lwjgl.glfw.GLFW
 import org.slf4j.LoggerFactory
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.atomic.AtomicInteger
 
 class YabRankedClient : ClientModInitializer {
 
@@ -181,33 +185,13 @@ class YabRankedClient : ClientModInitializer {
             log.info("left ranked match ${match.matchId}; fetching result")
 
             workers.execute {
-                // The backend reports the result as the game ends; it may take
-                // a short moment to be persisted and appear in history. We poll
-                // briefly so we can show the result screen right away instead of
-                // flashing a toast and doing nothing.
                 val uuid = before?.uuid ?: return@execute
-                var updated: WireProfile? = null
-                var entry: WireHistoryEntry? = null
-                var history: List<WireHistoryEntry> = emptyList()
-
-                // Initial wait to let the agent report, then poll up to ~12s
-                // total with short intervals. Stops early as soon as entry
-                // appears. Fetch enough history to also derive the win streak.
-                val attempts = 8
-                val delayMs = 1500L
-                Thread.sleep(1500)
-                repeat(attempts) { _ ->
-                    updated = backend.fetchProfile(uuid) ?: updated
-                    history = backend.fetchHistory(uuid, limit = 20)
-                    entry = history.firstOrNull { it.matchId == match.matchId }
-                    if (entry != null) return@repeat
-                    Thread.sleep(delayMs)
-                }
+                val poll = pollForResult(backend, uuid, match.matchId)
 
                 client.execute {
-                    val after = updated
-                    val e = entry
-                    RankedState.winStreak = RankedState.currentWinStreak(history)
+                    val after = poll.profile
+                    val e = poll.entry
+                    RankedState.winStreak = RankedState.currentWinStreak(poll.history)
                     // Only replace the loading screen if the player is still on it
                     // — they may have hit Skip, or opened another screen.
                     val onLoading = RankedState.onResultLoading
@@ -233,12 +217,62 @@ class YabRankedClient : ClientModInitializer {
         }
     }
 
+    /** What [pollForResult] managed to gather about a just-finished match. */
+    private class ResultPoll(
+        val profile: PlayerProfile?,
+        val entry: MatchHistoryEntry?,
+        val history: List<MatchHistoryEntry>,
+    )
+
+    /**
+     * Wait for the finished match to show up in the player's history.
+     *
+     * The backend only records the result as the game ends, so it is usually
+     * not persisted yet at the moment the client is disconnected. Wait once,
+     * then retry on a short interval and **return as soon as the entry lands**
+     * — worst case 1.5 s + 7 × 1.5 s ≈ 12 s of waiting. Fetch enough history to
+     * also derive the win streak.
+     *
+     * Blocking; call from [workers], never the render thread.
+     */
+    private fun pollForResult(backend: BackendClient, uuid: String, matchId: String): ResultPoll {
+        val attempts = 8
+        val delayMs = 1500L
+        var profile: PlayerProfile? = null
+        var history: List<MatchHistoryEntry> = emptyList()
+
+        Thread.sleep(delayMs)
+        for (attempt in 0 until attempts) {
+            // Keep the last profile we did get: a single flaky request should not
+            // cost us the rating delta we already read.
+            profile = backend.fetchProfile(uuid).orElse(profile)
+            history = backend.fetchHistory(uuid, limit = 20).orElse(history)
+            val entry = history.firstOrNull { it.matchId == matchId }
+            if (entry != null) return ResultPoll(profile, entry, history)
+            if (attempt < attempts - 1) Thread.sleep(delayMs)
+        }
+        return ResultPoll(profile, null, history)
+    }
+
     companion object {
         const val MOD_ID = "yabranked-client"
         private val log = LoggerFactory.getLogger("yabranked-client")
 
-        val workers = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "yabranked-client").apply { isDaemon = true }
+        private val workerId = AtomicInteger()
+
+        /**
+         * Pool for every blocking [BackendClient] call, plus the delayed queue
+         * reconnects in [RankedQueue].
+         *
+         * Deliberately more than one thread: the post-match result poll blocks
+         * its worker for ~12 s, and on a single-thread executor that stalled
+         * every unrelated call queued behind it (Queue again, profile loads).
+         * Small and fixed because the backend traffic is a handful of requests
+         * per screen, not a throughput problem.
+         */
+        val workers: ScheduledExecutorService = Executors.newScheduledThreadPool(3) { runnable ->
+            val id = workerId.incrementAndGet()
+            Thread(runnable, "yabranked-client-$id").apply { isDaemon = true }
         }
 
         val backendUrl: String =
