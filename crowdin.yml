@@ -1,0 +1,3 @@
+files:
+  - source: /client/src/main/resources/assets/yabranked-client/lang/en_us.json
+    translation: /client/src/main/resources/assets/yabranked-client/lang/%language%.json
