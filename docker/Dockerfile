@@ -3,7 +3,18 @@
 #   - bingo-<version>+mc26.2.jar   (YAB, built from the YAB repo)
 #   - yabranked-agent-<version>.jar
 #   - fabric-api-<version>.jar
-FROM eclipse-temurin:25-jre
+# Alpine, and that is not a size preference.
+#
+# On a 16 KB-page aarch64 host (Raspberry Pi 5), the glibc-based Temurin images
+# cannot run a JVM at all: `java -XshowSettings:properties -version` dies with a
+# bare "Exception in thread main", and a Fabric launcher reports "A JNI error has
+# occurred". The same JVM version on musl works, and so does the host's own JVM —
+# it is the image's glibc, not the JVM or the kernel. Match servers have to run
+# in a container, so the base has to be one that works on the hosts people
+# actually own.
+#
+# entrypoint.sh is #!/bin/sh with no GNU-isms, so nothing else has to change.
+FROM eclipse-temurin:25-jre-alpine
 
 ARG MINECRAFT_VERSION=26.2
 ARG FABRIC_LOADER_VERSION=0.19.3
