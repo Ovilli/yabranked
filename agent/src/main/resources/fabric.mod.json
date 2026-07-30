@@ -18,6 +18,12 @@
       }
     ]
   },
+  "mixins": [
+    {
+      "config": "yabranked-agent.mixins.json",
+      "environment": "*"
+    }
+  ],
   "depends": {
     "fabricloader": ">=0.16.9",
     "minecraft": ">=26.2",

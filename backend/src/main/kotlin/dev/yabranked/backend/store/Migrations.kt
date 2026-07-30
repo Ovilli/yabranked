@@ -121,6 +121,9 @@ class SchemaMigrator(
         val ALL = listOf(
             Migration(1, "baseline", "/schema.sql"),
             Migration(2, "rating_decay", "/migrations/V2__rating_decay.sql"),
+            Migration(3, "social", "/migrations/V3__social.sql"),
+            Migration(4, "replays", "/migrations/V4__replays.sql"),
+            Migration(5, "replay_packet_capture", "/migrations/V5__replay_packet_capture.sql"),
         )
 
         private const val CREATE_VERSION_TABLE = """

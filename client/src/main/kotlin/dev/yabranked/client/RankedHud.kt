@@ -20,6 +20,25 @@ class RankedHud : HudElement {
         val minecraft = Minecraft.getInstance()
         val font = minecraft.font
 
+        // The notice stack follows the player into the world. It used to be a
+        // menus-only thing paired with a vanilla toast; now there is one stack
+        // and this is where it reaches someone who is actually playing. No
+        // mouse here, so nothing is dismissable — they simply expire.
+        // drawInWorld, not draw: it stands down while a screen is drawing it.
+        RankedNotice.drawInWorld(g, font, minecraft.window.guiScaledWidth)
+
+        // Watching a recording is its own kind of being in a world, and it draws
+        // its own bar. Nothing below applies: there is no live match, no opponent
+        // and no clock that means what the match HUD's clock means.
+        if (dev.yabranked.client.replay.ReplayViewer.isWatching) {
+            dev.yabranked.client.replay.ReplayHud.draw(
+                g, font,
+                minecraft.window.guiScaledWidth,
+                minecraft.window.guiScaledHeight,
+            )
+            return
+        }
+
         val match = RankedState.activeMatch
         if (match == null) {
             // queued while playing elsewhere: show the search badge instead

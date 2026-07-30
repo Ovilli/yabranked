@@ -18,14 +18,70 @@ data class AgentConfig(
     val rules: MatchRules,
     val playerA: ExpectedPlayer,
     val playerB: ExpectedPlayer,
-    /** Seconds to wait for both players before voiding the match. */
+    /**
+     * Side-ordered rosters. A 1v1 is `[[playerA], [playerB]]`, which is exactly
+     * what an orchestrator that predates team modes produces, so nothing below
+     * has to special-case the two-player match.
+     */
+    val teams: List<List<ExpectedPlayer>>,
+    /**
+     * Seconds to wait for both players before voiding the match.
+     *
+     * Short, because this is time a player who *did* turn up spends alone in a
+     * bingo lobby. It used to be five minutes, which is long enough that the
+     * waiting player reads it as a broken match server rather than as a wait —
+     * and the common cause is a client that died the instant it was matched,
+     * which is never going to arrive however long the timer is.
+     */
     val noShowTimeoutSeconds: Long,
-    /** Seconds to keep the server up after a match so players can review results. */
+    /**
+     * Seconds between a settled match and the disconnect that ends the session.
+     *
+     * No longer a review window — it is a flush grace, capped by
+     * `YabRankedAgent.MAX_WIND_DOWN_SECONDS`. Players used to stay on the match
+     * server to read YAB's game-over screen, and that turned out to be a hazard
+     * rather than a courtesy: YAB's POSTGAME ends the moment a surviving player
+     * presses ready, which resets the worlds and drops everyone into a fresh lobby
+     * game, and meanwhile the ranked result screen — which hangs off `DISCONNECT`
+     * — could not appear at all. See `YabRankedAgent.endSessionAndShutdown`.
+     *
+     * The orchestrator still derives its teardown grace from this, so the
+     * container outlives the process rather than being killed mid-write.
+     */
     val postgameSeconds: Long,
-    /** Seconds a disconnected player has to return before forfeiting. */
-    val forfeitSeconds: Long,
+    /**
+     * Seconds between partial replay uploads; 0 records without checkpointing.
+     * A container killed before it reports — a forfeit settled over the
+     * player's own token, an OOM kill — then still leaves a usable recording.
+     */
+    val replayCheckpointSeconds: Long,
 ) {
     data class ExpectedPlayer(val uuid: UUID, val name: String)
+
+    /** Everyone allowed onto this server, in side order. */
+    val roster: List<ExpectedPlayer> get() = teams.flatten()
+
+    fun playerOf(uuid: UUID): ExpectedPlayer? = roster.firstOrNull { it.uuid == uuid }
+
+    /** Which side [uuid] plays for, or null when they are not in this match. */
+    fun sideOf(uuid: UUID): Int? =
+        teams.indexOfFirst { side -> side.any { it.uuid == uuid } }.takeIf { it >= 0 }
+
+    /** Everyone on [uuid]'s side except themselves. */
+    fun teammatesOf(uuid: UUID): List<ExpectedPlayer> =
+        sideOf(uuid)?.let { teams[it].filter { other -> other.uuid != uuid } } ?: emptyList()
+
+    fun opponentsOf(uuid: UUID): List<ExpectedPlayer> {
+        val side = sideOf(uuid) ?: return emptyList()
+        return teams.filterIndexed { index, _ -> index != side }.flatten()
+    }
+
+    /** YAB team name for each side, in the order the backend sent them. */
+    fun teamNameOf(side: Int): String = TEAM_NAMES.getOrElse(side) { "team${side + 1}" }
+
+    /** One roster entry as it crosses the container boundary. */
+    @kotlinx.serialization.Serializable
+    data class WirePlayer(val uuid: String, val name: String)
 
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
@@ -39,6 +95,23 @@ data class AgentConfig(
             val playerAName = env["YABRANKED_PLAYER_A_NAME"] ?: return null
             val playerBUuid = env["YABRANKED_PLAYER_B_UUID"]?.let(::parseUuid) ?: return null
             val playerBName = env["YABRANKED_PLAYER_B_NAME"] ?: return null
+
+            // Full rosters when the backend sent them; otherwise the two-player
+            // shape, so an older orchestrator keeps working unchanged.
+            val teams = env["YABRANKED_TEAMS"]
+                ?.let { raw ->
+                    runCatching { json.decodeFromString<List<List<WirePlayer>>>(raw) }.getOrNull()
+                }
+                ?.mapNotNull { side ->
+                    side.mapNotNull { entry ->
+                        parseUuid(entry.uuid)?.let { ExpectedPlayer(it, entry.name) }
+                    }.takeIf { it.size == side.size && it.isNotEmpty() }
+                }
+                ?.takeIf { it.size >= 2 }
+                ?: listOf(
+                    listOf(ExpectedPlayer(playerAUuid, playerAName)),
+                    listOf(ExpectedPlayer(playerBUuid, playerBName)),
+                )
 
             return AgentConfig(
                 backendUrl = backendUrl.trimEnd('/'),
@@ -54,13 +127,21 @@ data class AgentConfig(
                     ),
                 playerA = ExpectedPlayer(playerAUuid, playerAName),
                 playerB = ExpectedPlayer(playerBUuid, playerBName),
-                noShowTimeoutSeconds = env["YABRANKED_NO_SHOW_TIMEOUT_SECONDS"]?.toLongOrNull() ?: 300,
-                postgameSeconds = env["YABRANKED_POSTGAME_SECONDS"]?.toLongOrNull() ?: 180,
-                forfeitSeconds = env["YABRANKED_FORFEIT_SECONDS"]?.toLongOrNull() ?: 90,
+                teams = teams,
+                noShowTimeoutSeconds = env["YABRANKED_NO_SHOW_TIMEOUT_SECONDS"]?.toLongOrNull() ?: 90,
+                postgameSeconds = env["YABRANKED_POSTGAME_SECONDS"]?.toLongOrNull() ?: 20,
+                replayCheckpointSeconds =
+                    env["YABRANKED_REPLAY_CHECKPOINT_SECONDS"]?.toLongOrNull()?.coerceAtLeast(0) ?: 60,
             )
         }
 
         private fun parseUuid(value: String): UUID? =
             runCatching { UUID.fromString(value) }.getOrNull()
+
+        /**
+         * YAB's team names, in side order. The first two keep the colours the
+         * 1v1 path has always used, so existing behaviour is unchanged.
+         */
+        private val TEAM_NAMES = listOf("red", "blue", "green", "yellow", "aqua", "purple", "orange", "white")
     }
 }

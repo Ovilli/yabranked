@@ -20,6 +20,10 @@ class RankedOptionsScreen(
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
 
+    /** Top of the toggle block; set during [init] so the title is drawn against
+     *  the same value the buttons were laid out on. */
+    private var top = 0
+
     private class Toggle(
         val label: String,
         val get: () -> Boolean,
@@ -48,7 +52,8 @@ class RankedOptionsScreen(
             "Blue/orange win-loss colours instead of green/red.")
 
         val centerX = width / 2
-        var y = height / 2 - (toggles.size * ROW) / 2 - 4
+        top = layoutTop()
+        var y = top
         for (t in toggles) {
             val b = RankedButton(centerX - 120, y, 240, 20, rowLabel(t)) {
                 t.set(!t.get())
@@ -73,9 +78,33 @@ class RankedOptionsScreen(
             }
         )
         addRenderableWidget(
-            RankedButton(centerX - 100, y + 32, 200, 20, Component.literal("Done")) { onClose() }
+            RankedButton(centerX - 120, y + 32, 240, 20, Component.literal("Privacy…")) {
+                Config.save()
+                minecraft.setScreenAndShow(PrivacyScreen(this))
+            }
+        )
+        // Done is pinned to the bottom edge like every other ranked screen's
+        // Back/Done. Trailing the flowed block put it at `height/2 + 114`,
+        // which is off the bottom of the screen for any GUI height under 268 —
+        // including the 426×240 a 720p client gets at the default auto scale.
+        addRenderableWidget(
+            RankedButton(centerX - 100, height - 28, 200, 20, Component.literal("Done"), Ui.ICON_BACK) { onClose() }
         )
         opened.once { Sfx.open() }
+    }
+
+    /**
+     * Top of the toggle block: vertically centred when there is room, else
+     * lifted so the Privacy row still clears the hover-hint strip and the Done
+     * bar. Never above [MIN_TOP], which is what keeps the "OPTIONS" title
+     * (drawn 24px higher) on screen.
+     */
+    private fun layoutTop(): Int {
+        // Toggle rows, then the country/card pair at +6 and Privacy at +32,
+        // both 20 tall — 52px of trailer past the last toggle.
+        val block = toggles.size * ROW + 52
+        val centred = height / 2 - (toggles.size * ROW) / 2 - 4
+        return minOf(centred, height - BOTTOM_STRIP - block).coerceAtLeast(MIN_TOP)
     }
 
     /**
@@ -117,14 +146,13 @@ class RankedOptionsScreen(
     override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         super.extractRenderState(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
-        val top = height / 2 - (toggles.size * ROW) / 2 - 4
         g.centeredText(font, "§lOPTIONS", centerX, top - 24, Ui.ACCENT)
 
         // Hover hint for the toggle under the cursor.
         toggles.firstOrNull { t ->
             val b = t.button ?: return@firstOrNull false
             mouseX >= b.x && mouseX < b.x + b.width && mouseY >= b.y && mouseY < b.y + b.height
-        }?.let { g.centeredText(font, "§7${it.hint}", centerX, height - 44, Ui.TEXT_DIM) }
+        }?.let { g.centeredText(font, "§7${it.hint}", centerX, height - 40, Ui.TEXT_DIM) }
 
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
         Ui.fadeIn(g, width, height, openedAt)
@@ -137,5 +165,12 @@ class RankedOptionsScreen(
 
     private companion object {
         const val ROW = 24
+
+        /** Bottom edge the flowed block must clear: the hover-hint line at
+         *  `height - 40` and the Done bar at `height - 28` below it. */
+        const val BOTTOM_STRIP = 50
+
+        /** Leaves room for the "OPTIONS" title, drawn 24px above the block. */
+        const val MIN_TOP = 26
     }
 }

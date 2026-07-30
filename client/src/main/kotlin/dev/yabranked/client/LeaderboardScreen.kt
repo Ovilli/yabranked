@@ -10,9 +10,7 @@ import dev.yabranked.client.ui.RankedButton
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
-import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.network.chat.Component
-import net.minecraft.sounds.SoundEvents
 import org.lwjgl.glfw.GLFW
 
 class LeaderboardScreen(
@@ -142,6 +140,14 @@ class LeaderboardScreen(
         addRenderableWidget(
             RankedButton(centerX + 102, height - 52, 48, 20, Component.literal("Me"), Ui.ICON_PLAY) { jumpToMe() }
         )
+        // The overall MMR ladder stays this screen's subject; the per-mode and
+        // non-rating boards live next door rather than turning this one into a
+        // table that changes its columns under the player.
+        addRenderableWidget(
+            RankedButton(left + WIDTH - 70, height - 76, 70, 16, Component.literal("More boards"), Ui.ICON_LEADERBOARD) {
+                minecraft.setScreenAndShow(ModeLeaderboardScreen(this))
+            }
+        )
 
         opened.once { Sfx.open() }
 
@@ -240,7 +246,7 @@ class LeaderboardScreen(
             Ui.fadeIn(g, width, height, openedAt)
             return
         }
-        val visible = ((height - 40 - TOP) / ROW_HEIGHT).coerceAtLeast(1)
+        val visible = visibleRows()
         selected = selected.coerceIn(-1, rows.size - 1)
         scroll = scroll.coerceIn(0, (rows.size - visible).coerceAtLeast(0))
         for (i in 0 until visible) {
@@ -255,7 +261,11 @@ class LeaderboardScreen(
         Ui.fadeIn(g, width, height, openedAt)
     }
 
-    private fun visibleRows() = ((height - 40 - TOP) / ROW_HEIGHT).coerceAtLeast(1)
+    /** Rows that fit between the column headers and the bottom control block.
+     *  The single source for the row count — render, hit-testing and keyboard
+     *  scrolling all read it, so they can never disagree about which row is
+     *  where. */
+    private fun visibleRows() = ((height - BOTTOM_CONTROLS - TOP) / ROW_HEIGHT).coerceAtLeast(1)
 
     /** Scroll so the keyboard-selected row is on screen. */
     private fun ensureVisible() {
@@ -336,7 +346,7 @@ class LeaderboardScreen(
         val mouseX = event.x()
         val mouseY = event.y()
         if (mouseX < left || mouseX > left + WIDTH) return false
-        val visible = ((height - 40 - TOP) / ROW_HEIGHT).coerceAtLeast(1)
+        val visible = visibleRows()
         for (i in 0 until visible) {
             val index = i + scroll
             if (index >= rows.size) break
@@ -368,5 +378,16 @@ class LeaderboardScreen(
         const val WIDTH = 280
         const val TOP = 64 // leaves room for the search box (y=36..50) + column headers
         const val ROW_HEIGHT = 14
+
+        /**
+         * Height of the control block pinned to the bottom edge: "More boards"
+         * at `height - 76`, the tier/season/Me row at `height - 52` and Back at
+         * `height - 28`. The list stops above all of it.
+         *
+         * It used to stop at `height - 40`, so the last four rows were drawn
+         * over those buttons — and since a widget wins the click, pressing what
+         * looked like a player opened the mode boards instead.
+         */
+        const val BOTTOM_CONTROLS = 80
     }
 }

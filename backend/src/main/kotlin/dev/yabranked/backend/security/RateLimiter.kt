@@ -88,4 +88,10 @@ class RateLimiters(
     val sessionIdentity: RateLimiter = RateLimiter(limit = 10, window = 1.minutes),
     /** Agent endpoints, per source address; caps server-token guessing. */
     val internal: RateLimiter = RateLimiter(limit = 60, window = 1.minutes),
+    /**
+     * Friend requests, per sending account. A friend request is a notification
+     * someone else receives, so an unbudgeted endpoint is a harassment tool
+     * even with the "must have played together" rule narrowing the targets.
+     */
+    val friendRequests: RateLimiter = RateLimiter(limit = 20, window = 1.minutes),
 )

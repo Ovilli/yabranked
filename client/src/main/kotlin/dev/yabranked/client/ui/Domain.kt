@@ -397,6 +397,20 @@ open class UiDomain : UiIcons() {
         return "%d:%02d".format(seconds / 60, seconds % 60)
     }
 
+    /**
+     * "42 MB" from a byte count.
+     *
+     * Rounded to whole units on purpose: this labels replay sizes and download
+     * progress, where the player's question is "is that a lot" and never "is it
+     * 41.7 or 41.8".
+     */
+    fun bytes(count: Long): String = when {
+        count >= 1024L * 1024 * 1024 -> "%.1f GB".format(count / (1024.0 * 1024 * 1024))
+        count >= 1024L * 1024 -> "${count / (1024 * 1024)} MB"
+        count >= 1024L -> "${count / 1024} KB"
+        else -> "$count B"
+    }
+
     /** Compact total-time label for large spans: "3h 12m", "42m", "18s". */
     fun durationLong(seconds: Long?): String {
         if (seconds == null || seconds <= 0) return "—"

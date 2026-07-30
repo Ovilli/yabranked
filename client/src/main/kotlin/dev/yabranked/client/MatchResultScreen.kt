@@ -13,7 +13,6 @@ import net.minecraft.client.gui.screens.TitleScreen
 import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.network.chat.Component
 import net.minecraft.sounds.SoundEvents
-import org.lwjgl.glfw.GLFW
 
 /**
  * The screen title is also its narration message, so it carries the two facts
@@ -28,11 +27,13 @@ private fun resultTitle(entry: MatchHistoryEntry): Component {
         else -> "Match voided"
     }
     val after = entry.ratingAfter
-    val movement = if (after == null) {
-        "no rating change"
-    } else {
-        val delta = after - entry.ratingBefore
-        if (delta >= 0) "plus $delta MMR" else "minus ${-delta} MMR"
+    val movement = when {
+        !entry.rated -> "casual match, no rating change"
+        after == null -> "no rating change"
+        else -> {
+            val delta = after - entry.ratingBefore
+            if (delta >= 0) "plus $delta MMR" else "minus ${-delta} MMR"
+        }
     }
     return Component.literal("$outcome against ${entry.opponent.name}, $movement")
 }
@@ -64,6 +65,10 @@ class MatchResultScreen(
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
 
+    /** The "keep this recording" button, relabelled once the save lands. */
+    private var keepReplayButton: RankedButton? = null
+    private var savingReplay = false
+
     override fun init() {
         RankedState.onResultScreen = true
         addRenderableWidget(
@@ -71,7 +76,7 @@ class MatchResultScreen(
         ).setTooltip(Tooltip.create(Component.literal("Rejoin the queue and return to the ranked menu")))
         // Quick actions row above the main button
         addRenderableWidget(
-            RankedButton(width / 2 - 100, height - 76, 64, 20, Component.literal("History")) { openHistory() }
+            RankedButton(width / 2 - 100, height - 76, 64, 20, Component.literal("History"), Ui.ICON_HISTORY) { openHistory() }
         ).setTooltip(Tooltip.create(Component.literal("Browse your recent ranked matches")))
         addRenderableWidget(
             RankedButton(width / 2 - 32, height - 76, 64, 20, Component.literal("Copy ID")) { copyMatchId() }
@@ -79,7 +84,7 @@ class MatchResultScreen(
         // Reporting lives here (post-match), not on the main menu: this is the
         // "player you recently played with". Hidden once the match is reported.
         addRenderableWidget(
-            RankedButton(width / 2 + 36, height - 76, 64, 20, Component.literal("§cReport")) { openReport() }
+            RankedButton(width / 2 + 36, height - 76, 64, 20, Component.literal("§cReport"), Ui.ICON_REPORT) { openReport() }
         ).apply {
             active = !RankedState.lastMatchReported
             setTooltip(
@@ -91,6 +96,33 @@ class MatchResultScreen(
                 )
             )
         }
+        // Only offered for modes that had teammates, and only while the match
+        // is still inside the endorsement window — the backend decides both, and
+        // answers with an empty prompt otherwise.
+        RankedState.lastMatch?.takeIf { it.format.endorsable }?.let { match ->
+            addRenderableWidget(
+                RankedButton(width / 2 - 100, height - 100, 200, 20, Component.literal("Endorse teammates"), Ui.ICON_FRIENDS) {
+                    minecraft.setScreenAndShow(EndorseScreen(this, match.matchId))
+                }
+            )
+        }
+
+        // Every match records a replay and unsaved ones are deleted after the
+        // retention window, so the end of the match is the one moment the player
+        // is guaranteed to be asked. Saving is one click; watching is the other.
+        addRenderableWidget(
+            RankedButton(width / 2 - 100, height - 124, 96, 20, Component.literal("Save replay"), Ui.ICON_BOARD) {
+                saveReplay()
+            }
+        ).also { keepReplayButton = it }
+        addRenderableWidget(
+            RankedButton(width / 2 + 4, height - 124, 96, 20, Component.literal("Watch replay"), Ui.ICON_PLAY) {
+                minecraft.setScreenAndShow(
+                    dev.yabranked.client.replay.ReplayDownloadScreen(this, entry.matchId, "vs ${entry.opponent.name} · ${entry.format.displayName}")
+                )
+            }
+        )
+
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Done"), Ui.ICON_BACK) { onClose() }
         ).setTooltip(Tooltip.create(Component.literal("Close and return to the title screen")))
@@ -124,8 +156,51 @@ class MatchResultScreen(
         minecraft.setScreenAndShow(MatchHistoryScreen(this))
     }
 
+    /**
+     * Keep this match's recording.
+     *
+     * The recording is uploaded before the result, so by the time this screen
+     * exists it is normally already there. "Normally" is not "always" — a
+     * match settled from the menus is settled by the *client*, and the match
+     * server is then still finishing its upload — so a "no replay" answer is
+     * retried a couple of times before it is believed. Any other error is the
+     * backend's verdict and is shown as it came.
+     */
+    private fun saveReplay() {
+        val backend = RankedState.backend ?: return
+        if (savingReplay) return
+        savingReplay = true
+        val minecraft = this.minecraft
+        YabRankedClient.workers.execute {
+            var error = backend.saveReplay(entry.matchId)
+            var attempt = 0
+            while (error != null && error.contains("no replay", ignoreCase = true) && attempt < SAVE_RETRIES) {
+                attempt++
+                Thread.sleep(SAVE_RETRY_MILLIS)
+                error = backend.saveReplay(entry.matchId)
+            }
+            minecraft.execute {
+                savingReplay = false
+                if (error != null) {
+                    RankedNotice.error(error, title = "Replay")
+                    Sfx.tick()
+                } else {
+                    keepReplayButton?.message = Component.literal("§aSaved")
+                    keepReplayButton?.active = false
+                    RankedNotice.info("Replay saved to your account", title = "Replay")
+                    Sfx.select()
+                }
+            }
+        }
+    }
+
     private fun openReport() {
-        minecraft.setScreenAndShow(ReportScreen(this, entry.matchId, entry.opponent.name))
+        // Naming the opponent matters in team modes: without it the backend
+        // picks the first player of the other side, who need not be the one the
+        // reporter meant.
+        minecraft.setScreenAndShow(
+            ReportScreen(this, entry.matchId, entry.opponent.name, entry.opponent.uuid)
+        )
     }
 
     // Keyboard shortcut (R) is handled via a Fabric KeyMapping in YabRankedClient.
@@ -181,7 +256,13 @@ class MatchResultScreen(
         Ui.accentBar(g, left, top, CARD_HEIGHT, resultColor())
 
         val after = entry.ratingAfter
-        if (after == null) {
+        if (!entry.rated) {
+            // A casual game has a rating *before* it like any other, so the card
+            // used to render a delta chip against it. Nothing moved, and saying
+            // "±0 MMR" to someone who queued casual reads as if it had.
+            g.centeredText(font, "§7Casual match", centerX, top + 22, Ui.TEXT_DIM)
+            g.centeredText(font, "§8${entry.format.displayName} · MMR unaffected", centerX, top + 34, Ui.TEXT_FAINT)
+        } else if (after == null) {
             g.centeredText(font, "§7No rating change", centerX, top + 26, Ui.TEXT_DIM)
         } else {
             val delta = after - entry.ratingBefore
@@ -289,5 +370,9 @@ class MatchResultScreen(
     private companion object {
         const val CARD_WIDTH = 200
         const val CARD_HEIGHT = 62
+
+        /** Extra tries for a save that beat the match server's upload. */
+        const val SAVE_RETRIES = 3
+        const val SAVE_RETRY_MILLIS = 2000L
     }
 }

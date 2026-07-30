@@ -48,13 +48,34 @@ data class BackendConfig(
     val matchCpus: String?,
     /** How long in-flight requests get to finish once shutdown starts. */
     val shutdownGraceSeconds: Long,
+    /**
+     * Directory the packet streams of replays are written to, or null to keep
+     * them in memory.
+     *
+     * Not the database, whatever `YABRANKED_DATABASE_URL` says: a recording is
+     * tens of megabytes per player, appended in chunks and read back in ranges. A
+     * backend with no directory configured still records — it just loses the
+     * recordings on restart, the same bargain the in-memory stores make.
+     */
+    val replayDir: String?,
 ) {
     val usesPostgres: Boolean get() = databaseUrl != null
 
     companion object {
-        /** Two cores' worth of a bingo server is plenty; a runaway one gets no more. */
+        /**
+         * Ceiling per match container, so one runaway server cannot take the
+         * host down with it.
+         *
+         * Four cores, not two: Minecraft's world generation runs across worker
+         * threads, and YAB pre-generates every side's spawn area before the game
+         * can start. At two cores an observed match sat pinned at 100% for 83
+         * seconds preloading 81 chunks, spent the whole time logging "Can't keep
+         * up", and timed out YAB's async spawn search into its fallback
+         * position. Raise it further on a host with cores to spare; the point of
+         * the cap is only that one bad match server cannot take the host with it.
+         */
         const val DEFAULT_MATCH_MEMORY = "4g"
-        const val DEFAULT_MATCH_CPUS = "2"
+        const val DEFAULT_MATCH_CPUS = "4"
         const val DEFAULT_SHUTDOWN_GRACE_SECONDS = 15L
 
         fun fromEnv(args: Array<String> = emptyArray(), env: Env = System::getenv): BackendConfig {
@@ -98,6 +119,7 @@ data class BackendConfig(
                 matchCpus = env.dockerCpus("YABRANKED_MATCH_CPUS", DEFAULT_MATCH_CPUS),
                 shutdownGraceSeconds = env.positiveLong("YABRANKED_SHUTDOWN_GRACE_SECONDS")
                     ?: DEFAULT_SHUTDOWN_GRACE_SECONDS,
+                replayDir = env.string("YABRANKED_REPLAY_DIR"),
             )
         }
 

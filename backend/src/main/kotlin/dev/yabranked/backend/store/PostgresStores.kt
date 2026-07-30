@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource
 import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchSettings
+import dev.yabranked.proto.PrivacySettings
 import java.sql.Connection
 import java.sql.ResultSet
 import java.sql.Timestamp
@@ -125,6 +126,11 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         background = getString("background") ?: "default",
         hideFlag = getBoolean("hide_flag"),
         hideRating = getBoolean("hide_rating"),
+        // A row written before the privacy block existed has none; rebuild it
+        // from the two legacy booleans rather than handing back the permissive
+        // defaults, which would silently re-expose a flag the player had hidden.
+        privacy = getString("privacy")?.let { SocialJson.decodePrivacy(it) }
+            ?: PlayerRecord.privacyFromLegacy(getBoolean("hide_flag"), getBoolean("hide_rating")),
     )
 
     private fun ResultSet.toStats() = SeasonStats(
@@ -142,8 +148,14 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         decayedThrough = instant("decayed_through"),
     )
 
-    override fun getPlayer(uuid: UUID): PlayerRecord? = db.withConnection { c ->
-        c.prepareStatement("SELECT * FROM players WHERE uuid = ?").use { s ->
+    override fun getPlayer(uuid: UUID): PlayerRecord? = selectPlayer(uuid, lock = false)
+
+    override fun getPlayerForUpdate(uuid: UUID): PlayerRecord? =
+        selectPlayer(uuid, lock = db.inTransaction())
+
+    private fun selectPlayer(uuid: UUID, lock: Boolean): PlayerRecord? = db.withConnection { c ->
+        val sql = "SELECT * FROM players WHERE uuid = ?" + if (lock) " FOR UPDATE" else ""
+        c.prepareStatement(sql).use { s ->
             s.setObject(1, uuid)
             s.executeQuery().use { r -> if (r.next()) r.toPlayer() else null }
         }
@@ -168,11 +180,13 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
         db.withConnection { c ->
             c.prepareStatement(
                 """
-                INSERT INTO players (uuid, name, banned_at, created_at, country, background, hide_flag, hide_rating)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO players (uuid, name, banned_at, created_at, country, background,
+                    hide_flag, hide_rating, privacy)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (uuid) DO UPDATE SET name = excluded.name, banned_at = excluded.banned_at,
                     country = excluded.country, background = excluded.background,
-                    hide_flag = excluded.hide_flag, hide_rating = excluded.hide_rating
+                    hide_flag = excluded.hide_flag, hide_rating = excluded.hide_rating,
+                    privacy = excluded.privacy
                 """.trimIndent()
             ).use { s ->
                 s.setObject(1, record.uuid)
@@ -183,8 +197,18 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
                 s.setString(6, record.background)
                 s.setBoolean(7, record.hideFlag)
                 s.setBoolean(8, record.hideRating)
+                s.setString(9, SocialJson.encodePrivacy(record.privacy))
                 s.executeUpdate()
             }
+        }
+    }
+
+    override fun findByName(name: String): PlayerRecord? = db.withConnection { c ->
+        // lower(name) rather than ILIKE: exact match only, and it can use a
+        // functional index if the name lookup ever becomes hot.
+        c.prepareStatement("SELECT * FROM players WHERE lower(name) = lower(?) LIMIT 1").use { s ->
+            s.setString(1, name)
+            s.executeQuery().use { r -> if (r.next()) r.toPlayer() else null }
         }
     }
 
@@ -344,6 +368,11 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
             worldSeed = getLong("world_seed"),
             cardSeed = getLong("card_seed"),
             timeLimitSeconds = getLong("time_limit_s"),
+            sharedWorld = getBoolean("shared_world"),
+            sharedSeed = getBoolean("shared_seed"),
+            perTeamWorldSeeds = SocialJson.decodeLongs(getString("per_team_world_seeds")),
+            perTeamCardSeeds = SocialJson.decodeLongs(getString("per_team_card_seeds")),
+            teamCount = getInt("team_count"),
         ),
         playerA = getObject("player_a", UUID::class.java),
         playerB = getObject("player_b", UUID::class.java),
@@ -361,6 +390,11 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         forfeitedBy = getObject("forfeited_by", UUID::class.java),
         createdAt = instant("created_at")!!,
         completedAt = instant("completed_at"),
+        teams = SocialJson.decodeTeams(getString("teams")),
+        teamScores = SocialJson.decodeInts(getString("team_scores")),
+        winningTeam = getObject("winning_team") as Int?,
+        partyId = getObject("party_id", UUID::class.java),
+        rated = getBoolean("rated"),
     )
 
     private fun bind(s: java.sql.PreparedStatement, m: MatchRecord) {
@@ -386,6 +420,19 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         s.setTimestamp(20, Timestamp.from(m.createdAt))
         s.setTimestamp(21, m.completedAt?.let(Timestamp::from))
         s.setObject(22, m.forfeitedBy)
+        s.setString(23, SocialJson.encodeTeams(m.teams))
+        s.setString(24, SocialJson.encodeInts(m.teamScores))
+        s.setObject(25, m.winningTeam)
+        s.setObject(26, m.partyId)
+        s.setBoolean(27, m.rated)
+        s.setBoolean(28, m.settings.sharedWorld)
+        s.setBoolean(29, m.settings.sharedSeed)
+        s.setString(30, SocialJson.encodeLongs(m.settings.perTeamWorldSeeds))
+        s.setString(31, SocialJson.encodeLongs(m.settings.perTeamCardSeeds))
+        s.setInt(32, m.settings.teamCount)
+        // The flattened roster is what "matches this player was in" searches;
+        // player_a/player_b are only each side's first player once teams exist.
+        s.setArray(33, s.connection.createArrayOf("uuid", m.participants.toTypedArray()))
     }
 
     override fun get(id: UUID): MatchRecord? = selectMatch(id, lock = false)
@@ -407,8 +454,12 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 INSERT INTO matches (id, season, format, world_seed, card_seed, time_limit_s,
                     player_a, player_b, status, server_token, server_address, outcome,
                     rating_a_before, rating_b_before, rating_a_after, rating_b_after,
-                    duration_s, team_a_score, team_b_score, created_at, completed_at, forfeited_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    duration_s, team_a_score, team_b_score, created_at, completed_at, forfeited_by,
+                    teams, team_scores, winning_team, party_id, rated,
+                    shared_world, shared_seed, per_team_world_seeds, per_team_card_seeds, team_count,
+                    participants)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """.trimIndent()
             ).use { s ->
                 bind(s, record)
@@ -423,7 +474,8 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 """
                 UPDATE matches SET status = ?, server_address = ?, outcome = ?,
                     rating_a_after = ?, rating_b_after = ?, duration_s = ?,
-                    team_a_score = ?, team_b_score = ?, forfeited_by = ?, completed_at = ?
+                    team_a_score = ?, team_b_score = ?, forfeited_by = ?, completed_at = ?,
+                    team_scores = ?, winning_team = ?
                 WHERE id = ?
                 """.trimIndent()
             ).use { s ->
@@ -437,7 +489,9 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 s.setObject(8, record.teamBScore)
                 s.setObject(9, record.forfeitedBy)
                 s.setTimestamp(10, record.completedAt?.let(Timestamp::from))
-                s.setObject(11, record.id)
+                s.setString(11, SocialJson.encodeInts(record.teamScores))
+                s.setObject(12, record.winningTeam)
+                s.setObject(13, record.id)
                 s.executeUpdate()
             }
         }
@@ -447,14 +501,13 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         db.withConnection { c ->
             c.prepareStatement(
                 """
-                SELECT * FROM matches WHERE season = ? AND (player_a = ? OR player_b = ?)
+                SELECT * FROM matches WHERE season = ? AND participants @> ARRAY[?]::uuid[]
                 ORDER BY created_at DESC LIMIT ?
                 """.trimIndent()
             ).use { s ->
                 s.setInt(1, season)
                 s.setObject(2, player)
-                s.setObject(3, player)
-                s.setInt(4, limit)
+                s.setInt(3, limit)
                 s.executeQuery().use { r ->
                     buildList { while (r.next()) add(r.toMatch()) }
                 }
@@ -465,15 +518,14 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         db.withConnection { c ->
             c.prepareStatement(
                 """
-                SELECT * FROM matches WHERE season = ? AND (player_a = ? OR player_b = ?)
+                SELECT * FROM matches WHERE season = ? AND participants @> ARRAY[?]::uuid[]
                     AND outcome IS NOT NULL AND outcome <> 'VOID'
                 ORDER BY created_at DESC LIMIT ?
                 """.trimIndent()
             ).use { s ->
                 s.setInt(1, season)
                 s.setObject(2, player)
-                s.setObject(3, player)
-                s.setInt(4, limit)
+                s.setInt(3, limit)
                 s.executeQuery().use { r ->
                     buildList { while (r.next()) add(r.toMatch()) }
                 }
@@ -485,7 +537,7 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
             c.prepareStatement(
                 """
                 SELECT * FROM matches WHERE season = ?
-                    AND ((player_a = ? AND player_b = ?) OR (player_a = ? AND player_b = ?))
+                    AND participants @> ARRAY[?, ?]::uuid[]
                     AND outcome IS NOT NULL AND outcome <> 'VOID'
                 ORDER BY created_at DESC LIMIT ?
                 """.trimIndent()
@@ -493,11 +545,12 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
                 s.setInt(1, season)
                 s.setObject(2, a)
                 s.setObject(3, b)
-                s.setObject(4, b)
-                s.setObject(5, a)
-                s.setInt(6, limit)
+                s.setInt(4, limit)
                 s.executeQuery().use { r ->
+                    // Both played; head-to-head additionally means they were on
+                    // *opposite* sides, which only the rosters can say.
                     buildList { while (r.next()) add(r.toMatch()) }
+                        .filter { it.sideOf(a) != it.sideOf(b) }
                 }
             }
         }
@@ -507,6 +560,23 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
             s.executeQuery().use { r ->
                 buildList { while (r.next()) add(r.toMatch()) }
             }
+        }
+    }
+
+    // The GIN index on participants is what makes this cheap enough to be
+    // polled; player_a/player_b are only each side's first player once teams
+    // exist, so they cannot answer this question.
+    override fun liveFor(player: UUID): MatchRecord? = db.withConnection { c ->
+        c.prepareStatement(
+            """
+            SELECT * FROM matches
+             WHERE status IN ('PENDING', 'ACTIVE') AND participants @> ARRAY[?]::uuid[]
+             ORDER BY created_at DESC
+             LIMIT 1
+            """.trimIndent()
+        ).use { s ->
+            s.setObject(1, player)
+            s.executeQuery().use { r -> if (r.next()) r.toMatch() else null }
         }
     }
 }
@@ -554,6 +624,37 @@ class PostgresReportStore(private val db: Database) : ReportStore {
             s.setObject(1, matchId)
             s.setObject(2, reporter)
             s.executeQuery().use { r -> r.next() }
+        }
+    }
+
+    override fun existsFor(matchId: UUID, reporter: UUID, accused: UUID): Boolean = db.withConnection { c ->
+        c.prepareStatement(
+            "SELECT 1 FROM reports WHERE match_id = ? AND reporter = ? AND accused = ?"
+        ).use { s ->
+            s.setObject(1, matchId)
+            s.setObject(2, reporter)
+            s.setObject(3, accused)
+            s.executeQuery().use { r -> r.next() }
+        }
+    }
+
+    override fun forMatch(matchId: UUID): List<ReportRecord> = db.withConnection { c ->
+        c.prepareStatement("SELECT * FROM reports WHERE match_id = ? ORDER BY created_at").use { s ->
+            s.setObject(1, matchId)
+            s.executeQuery().use { r ->
+                buildList {
+                    while (r.next()) add(
+                        ReportRecord(
+                            id = r.getObject("id", UUID::class.java),
+                            matchId = r.getObject("match_id", UUID::class.java),
+                            reporter = r.getObject("reporter", UUID::class.java),
+                            accused = r.getObject("accused", UUID::class.java),
+                            reason = r.getString("reason"),
+                            createdAt = r.instant("created_at")!!,
+                        )
+                    )
+                }
+            }
         }
     }
 }

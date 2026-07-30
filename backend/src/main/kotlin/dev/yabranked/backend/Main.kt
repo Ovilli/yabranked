@@ -25,7 +25,16 @@ import dev.yabranked.backend.season.SeasonService
 import dev.yabranked.backend.store.Database
 import dev.yabranked.backend.store.AchievementStore
 import dev.yabranked.backend.store.InMemoryAchievementStore
+import dev.yabranked.backend.store.InMemoryEndorsementStore
+import dev.yabranked.backend.store.InMemoryFriendStore
+import dev.yabranked.backend.store.InMemoryModeStatsStore
 import dev.yabranked.backend.store.InMemoryReportStore
+import dev.yabranked.backend.store.EndorsementStore
+import dev.yabranked.backend.store.FriendStore
+import dev.yabranked.backend.store.ModeStatsStore
+import dev.yabranked.backend.store.PostgresEndorsementStore
+import dev.yabranked.backend.store.PostgresFriendStore
+import dev.yabranked.backend.store.PostgresModeStatsStore
 import dev.yabranked.backend.store.LockingTransactionRunner
 import dev.yabranked.backend.store.PostgresAchievementStore
 import dev.yabranked.backend.store.PostgresTransactionRunner
@@ -82,7 +91,11 @@ fun main(args: Array<String>) {
     val players: PlayerStore
     val matches: MatchStore
     val reports: ReportStore
+    val replays: dev.yabranked.backend.store.ReplayStore
     val achievements: AchievementStore
+    val friendStore: FriendStore
+    val endorsementStore: EndorsementStore
+    val modeStats: ModeStatsStore
     val seasons: SeasonService
     val transactions: TransactionRunner
     // Store calls are blocking JDBC; handlers hop here instead of running them
@@ -112,7 +125,11 @@ fun main(args: Array<String>) {
         players = PostgresPlayerStore(db)
         matches = PostgresMatchStore(db)
         reports = PostgresReportStore(db)
+        replays = dev.yabranked.backend.store.PostgresReplayStore(db)
         achievements = PostgresAchievementStore(db)
+        friendStore = PostgresFriendStore(db)
+        endorsementStore = PostgresEndorsementStore(db)
+        modeStats = PostgresModeStatsStore(db)
         transactions = PostgresTransactionRunner(db)
         seasons = SeasonService(
             initialSeason = config.season
@@ -127,7 +144,11 @@ fun main(args: Array<String>) {
         players = InMemoryPlayerStore()
         matches = InMemoryMatchStore()
         reports = InMemoryReportStore()
+        replays = dev.yabranked.backend.store.InMemoryReplayStore()
         achievements = InMemoryAchievementStore()
+        friendStore = InMemoryFriendStore()
+        endorsementStore = InMemoryEndorsementStore()
+        modeStats = InMemoryModeStatsStore()
         transactions = LockingTransactionRunner()
         seasons = SeasonService(config.season ?: 1)
         storeDispatcher = StoreDispatchers.default
@@ -153,6 +174,7 @@ fun main(args: Array<String>) {
         players, matches, rating, seasons,
         achievements = achievements,
         transactions = transactions,
+        modeStats = modeStats,
     )
     val queueService = QueueService(
         MatchmakingQueue(), matchService,
@@ -218,11 +240,24 @@ fun main(args: Array<String>) {
 
     // Keeps the visible top of the ladder honest: without it an inactive
     // top-ten player holds their rank by never queueing again.
-    val decaySweep = DecaySweep(players, seasons, rating)
+    val decaySweep = DecaySweep(players, seasons, rating, transactions = transactions)
+    // Recordings are large and every match makes one, so the default is that
+    // they expire; the store decides what a save or a report keeps alive.
+    val replayPolicy = dev.yabranked.backend.store.ReplayPolicy()
+    // The packets themselves never go in the database; see ReplayBlobStores.kt.
+    // No directory configured means recordings live for as long as the process
+    // does, which is the same bargain the in-memory stores make.
+    val replayBlobs = config.replayDir
+        ?.let { dev.yabranked.backend.store.FileReplayBlobStore(java.nio.file.Path.of(it)) }
+        ?: dev.yabranked.backend.store.InMemoryReplayBlobStore().also {
+            log.warn("no YABRANKED_REPLAY_DIR set — replay packet data is in memory and lost on restart")
+        }
+    val replaySweep = dev.yabranked.backend.store.ReplaySweep(replays, replayBlobs)
 
     val server = embeddedServer(Netty, port = config.port) {
         queueService.start(this)
         decaySweep.start(this)
+        replaySweep.start(this)
         orchestrator?.start(this)
         requestLogging()
         metricsRoutes(metrics)
@@ -238,10 +273,15 @@ fun main(args: Array<String>) {
                 minClientVersion = config.minClientVersion,
                 seasons = seasons,
                 reports = reports,
+                replays = replays,
+                replayBlobs = replayBlobs,
+                replayPolicy = replayPolicy,
                 achievements = achievements,
                 adminToken = config.adminToken,
                 rollover = SeasonRollover(players, rating),
                 storeDispatcher = storeDispatcher,
+                friendStore = friendStore,
+                endorsementStore = endorsementStore,
             )
         )
     }
@@ -250,6 +290,7 @@ fun main(args: Array<String>) {
     // go red so traffic drains away, and only then close what holds resources.
     shutdown.step("matchmaking") { queueService.stop() }
     shutdown.step("decay") { decaySweep.stop() }
+    shutdown.step("replays") { replaySweep.stop() }
     shutdown.step("http") {
         server.stop(gracePeriodMillis = config.shutdownGraceSeconds * 1000, timeoutMillis = config.shutdownGraceSeconds * 1000)
     }

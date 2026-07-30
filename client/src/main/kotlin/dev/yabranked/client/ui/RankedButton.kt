@@ -26,6 +26,12 @@ class RankedButton(
     label: Component,
     /** Optional icon-atlas index drawn at the left; see [Ui] ICON_* constants. */
     private val icon: Int? = null,
+    /**
+     * Draw only [icon], centred, and keep [label] purely as the narration and
+     * tooltip text. For square buttons where a word would not fit — the label is
+     * still what a narrator reads, so the button is not silent.
+     */
+    private val iconOnly: Boolean = false,
     private val onPress: () -> Unit,
 ) : AbstractWidget(x, y, width, height, label) {
 
@@ -87,7 +93,9 @@ class RankedButton(
             else -> Ui.TEXT_SOFT
         }
 
-        if (icon != null) {
+        if (icon != null && iconOnly) {
+            Ui.icon(g, icon, x + (width - 10) / 2, y + (height - 10) / 2, 10, color)
+        } else if (icon != null) {
             Ui.icon(g, icon, x + 6, y + (height - 10) / 2, 10, color)
             // nudge the label right of the icon so the two never touch
             g.centeredText(font, text, x + 8 + width / 2, y + (height - 8) / 2, color)

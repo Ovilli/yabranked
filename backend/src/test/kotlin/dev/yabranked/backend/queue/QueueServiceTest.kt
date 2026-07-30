@@ -49,6 +49,8 @@ private class FlakyMatchStore(private var failures: Int) : MatchStore {
         delegate.between(a, b, season, limit)
 
     override fun unsettled(): List<MatchRecord> = delegate.unsettled()
+
+    override fun liveFor(player: UUID): MatchRecord? = delegate.liveFor(player)
 }
 
 class QueueServiceTest {

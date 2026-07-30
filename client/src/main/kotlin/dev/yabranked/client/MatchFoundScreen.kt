@@ -41,7 +41,7 @@ class MatchFoundScreen(
 
     override fun init() {
         addRenderableWidget(
-            RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Join now")) { connect() }
+            RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Join now"), Ui.ICON_PLAY) { connect() }
         ).setTooltip(Tooltip.create(Component.literal("Skip the countdown and connect to the match server now")))
 
         minecraft.soundManager.play(
@@ -106,6 +106,7 @@ class MatchFoundScreen(
         val self = RankedState.profile
 
         g.centeredText(font, "§lMATCH FOUND", centerX, 26, Ui.ACCENT)
+        g.centeredText(font, match.format.displayName, centerX, 38, Ui.TEXT_FAINT)
 
         val top = 52
         val cardWidth = 118
@@ -125,6 +126,25 @@ class MatchFoundScreen(
 
         val emblemY = top + CARD_HEIGHT / 2 - 14
         Ui.vsEmblem(g, centerX, emblemY, size = 28)
+
+        drawRosters(g, leftX, rightX, cardWidth, top + CARD_HEIGHT + 2)
+
+        // Form, next to the rating: two players on the same MMR are not the same
+        // opponent if one of them has won their last six.
+        match.opponentStreak?.takeIf { it >= 2 }?.let { streak ->
+            g.centeredText(
+                font,
+                "§cOpponent is on a $streak win streak",
+                rightX + cardWidth / 2, top + CARD_HEIGHT - 10, Ui.LOSS,
+            )
+        }
+        RankedState.winStreak.takeIf { it >= 2 }?.let { streak ->
+            g.centeredText(
+                font,
+                "§a$streak win streak",
+                leftX + cardWidth / 2, top + CARD_HEIGHT - 10, Ui.WIN,
+            )
+        }
 
         // rating gap tells you what kind of match to expect — suppressed if
         // either rating is hidden, since it would leak the concealed number
@@ -160,6 +180,36 @@ class MatchFoundScreen(
         Ui.fadeIn(g, width, height, openedAt)
     }
 
+    /**
+     * Teammates and the rest of the enemy side, under the two headline cards.
+     *
+     * A team match's card still shows one player a side — the captain — because
+     * that is what the rating gap and head-to-head lines are about; everyone
+     * else is listed here so the player knows who they are actually playing
+     * with before they connect.
+     */
+    private fun drawRosters(g: GuiGraphicsExtractor, leftX: Int, rightX: Int, cardWidth: Int, y: Int) {
+        val sides = match.teams
+        if (sides.size < 2) return
+        val mine = sides.getOrNull(match.teamIndex) ?: return
+        val theirs = sides.firstOrNull { it.index != match.teamIndex } ?: return
+        if (mine.players.size <= 1 && theirs.players.size <= 1) return
+
+        fun column(side: dev.yabranked.proto.MatchSide, x: Int, skip: String?, color: Int) {
+            var row = y
+            for (player in side.players) {
+                if (player.uuid == skip) continue
+                PlayerHeads.draw(g, x + 4, row, 8, player.uuid, player.name, color)
+                g.text(font, Ui.fit(font, player.name, cardWidth - 18), x + 15, row, color)
+                row += 10
+            }
+        }
+
+        // The captain is already the big card above, so it is skipped here.
+        column(mine, leftX, RankedState.profile?.uuid, Ui.TEXT_SOFT)
+        column(theirs, rightX, match.opponent.uuid, Ui.TEXT_DIM)
+    }
+
     private fun playerCard(
         g: GuiGraphicsExtractor,
         x: Int,
@@ -183,12 +233,15 @@ class MatchFoundScreen(
         Ui.slot(g, centerX - HEAD / 2 - 3, y + 14, HEAD + 6)
         PlayerHeads.draw(g, centerX - HEAD / 2, y + 17, HEAD, uuid, name, tierColor)
         val nameY = y + 17 + HEAD + 5
+        // A 16-character name in wide glyphs is wider than the 118px card, and
+        // the flag hangs 12px further left again — so clamp first and place the
+        // flag off the clamped width, or both bleed past the plate edge.
+        val shownName = Ui.fit(font, name, cardWidth - FLAG_GUTTER - 8)
         if (RankedState.showFlags && (!isSelf || !RankedState.hideOwnFlag)) {
-            val w = font.width(name)
-            val nameLeft = centerX - w / 2
-            Ui.flagIcon(g, nameLeft - 12, nameY, country, 9)
+            val nameLeft = centerX - font.width(shownName) / 2
+            Ui.flagIcon(g, nameLeft - FLAG_GUTTER, nameY, country, 9)
         }
-        g.centeredText(font, name, centerX, nameY, if (isSelf) Ui.ACCENT else Ui.WHITE)
+        g.centeredText(font, shownName, centerX, nameY, if (isSelf) Ui.ACCENT else Ui.WHITE)
         Ui.rankBadge(g, centerX - 8, y + 17 + HEAD + 14, tier)
         g.centeredText(font, tier, centerX, y + 17 + HEAD + 34, tierColor)
         // rating <= 0 on the opponent means the server redacted it (they hide
@@ -234,5 +287,8 @@ class MatchFoundScreen(
         const val COUNTDOWN_TICKS = 5 * 20
         const val CARD_HEIGHT = 108
         const val HEAD = 32
+
+        /** Space left of the name for the country flag. */
+        const val FLAG_GUTTER = 12
     }
 }

@@ -67,7 +67,10 @@ object RankedQueue {
         Minecraft.getInstance().narrator.saySystemNow(Component.literal(text))
     }
 
-    fun join(format: MatchFormat = RankedState.selectedFormat) {
+    /** True while the current queue entry is the whole party's, not just ours. */
+    private var asParty = false
+
+    fun join(format: MatchFormat = RankedState.selectedFormat, asParty: Boolean = false) {
         if (RankedState.backend == null) {
             RankedState.queueStatus = "§cPlease sign in first"
             return
@@ -80,6 +83,7 @@ object RankedQueue {
         RankedState.lastRatingChange = null
         RankedState.queueStatus = "Joining queue…"
         wanted = format
+        this.asParty = asParty
         reconnects = 0
         narratedSearching = false
         narratedPreparing = false
@@ -113,6 +117,7 @@ object RankedQueue {
                 format = format,
                 onMessage = { message -> minecraft.execute { if (id == generation) onMessage(message) } },
                 onClosed = { reason -> minecraft.execute { if (id == generation) onClosed(reason) } },
+                asParty = asParty,
             )
             minecraft.execute {
                 if (id != generation) {
@@ -204,9 +209,33 @@ object RankedQueue {
             }
 
             is QueueServerMessage.QueueError -> {
+                // A refusal, not a dropped connection: the server has told us
+                // why it will not queue this player, and the socket is about to
+                // close. Retiring the attempt is what stops the reconnect loop —
+                // otherwise onClosed sees `wanted` still set and tries again a
+                // second later, forever, because any message (this one included)
+                // resets the backoff.
+                generation++
+                wanted = null
+                cancelReconnect()
+                RankedState.queue = null
                 RankedState.queueSnapshot = null
                 RankedState.queueStatus = "§c${message.message}"
                 narrate("Queue error. ${message.message}")
+            }
+
+            is QueueServerMessage.QueueCancelled -> {
+                // The party changed under the search — the leader left, or the
+                // roster no longer fills the format. The server has already
+                // dropped the entry, so this is a real end to the queue and not
+                // a blip to reconnect through.
+                generation++
+                wanted = null
+                cancelReconnect()
+                RankedState.queue = null
+                RankedState.queueSnapshot = null
+                RankedState.queueStatus = "§e${message.reason}"
+                narrate("Search cancelled. ${message.reason}")
             }
 
             is QueueServerMessage.MatchFound -> {

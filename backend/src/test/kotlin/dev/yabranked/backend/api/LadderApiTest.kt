@@ -191,6 +191,62 @@ class LadderApiTest {
     }
 
     @Test
+    fun `a report from a profile resolves the match itself`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+
+        val a = UUID.randomUUID()
+        val b = UUID.randomUUID()
+        val match = playedMatch(a, b)
+        val tokenA = tokens.issue(a)
+
+        // The profile screen has a player, not a match id. The backend finds the
+        // most recent match the two shared and pins the accused to its roster.
+        val ok = client.post("/v1/reports") {
+            contentType(ContentType.Application.Json)
+            header("Authorization", "Bearer $tokenA")
+            setBody(ReportRequest(reason = "hacking", accused = b.toString()))
+        }
+        assertEquals(HttpStatusCode.OK, ok.status)
+
+        val listed = client.get("/v1/admin/reports") { header("X-Admin-Token", "admin-secret") }
+        assertTrue(listed.body<String>().contains(match.id.toString()))
+        assertTrue(listed.body<String>().contains(b.toString()))
+    }
+
+    @Test
+    fun `a report naming someone you never played is refused`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+
+        val a = UUID.randomUUID()
+        playedMatch(a, UUID.randomUUID())
+        val tokenA = tokens.issue(a)
+
+        val nobody = client.post("/v1/reports") {
+            contentType(ContentType.Application.Json)
+            header("Authorization", "Bearer $tokenA")
+            setBody(ReportRequest(reason = "hacking", accused = UUID.randomUUID().toString()))
+        }
+        assertEquals(HttpStatusCode.NotFound, nobody.status)
+    }
+
+    @Test
+    fun `a report with neither a match nor a player is a bad request`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+        val a = UUID.randomUUID()
+        playedMatch(a, UUID.randomUUID())
+
+        val empty = client.post("/v1/reports") {
+            contentType(ContentType.Application.Json)
+            header("Authorization", "Bearer ${tokens.issue(a)}")
+            setBody(ReportRequest(reason = "hacking"))
+        }
+        assertEquals(HttpStatusCode.BadRequest, empty.status)
+    }
+
+    @Test
     fun `ban blocks auth and unban restores it`() = testApplication {
         application { rankedApi(deps()) }
         val client = jsonClient()

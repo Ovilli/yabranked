@@ -35,6 +35,17 @@ class MatchDetailScreen(
         addRenderableWidget(
             RankedButton(centerX + 2, height - 28, 120, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
         )
+        // Offered unconditionally: whether a recording exists is the backend's
+        // answer, and the viewer says so plainly. Hiding the button on a guess
+        // would mean no way in whenever that guess was wrong.
+        addRenderableWidget(
+            RankedButton(centerX - 122, height - 52, 244, 20, Component.literal("Watch replay"), Ui.ICON_BOARD) {
+                Sfx.select()
+                minecraft.setScreenAndShow(
+                    dev.yabranked.client.replay.ReplayDownloadScreen(this, entry.matchId, "vs ${entry.opponent.name} · ${entry.format.displayName}")
+                )
+            }
+        )
         opened.once { Sfx.open() }
     }
 
@@ -73,18 +84,28 @@ class MatchDetailScreen(
         if (RankedState.showFlags) {
             entry.opponent.country?.let { Ui.flagIcon(g, nx, oy + 3, it, 9); nx += 12 }
         }
-        g.text(font, "§7vs §f${entry.opponent.name}", nx, oy + 3, Ui.WHITE)
+        // Stops short of the MMR column on the same line.
+        g.text(font, Ui.fit(font, "§7vs §f${entry.opponent.name}", left + CARD_W - 64 - nx), nx, oy + 3, Ui.WHITE)
         entry.opponentRating?.let {
             Ui.textRight(g, font, "§7$it MMR", left + CARD_W - 10, oy + 3, Ui.TEXT_DIM)
         }
 
         // Stat rows.
         var ry = TOP + 48
-        val mmrLine = entry.ratingAfter?.let { after ->
-            val d = after - entry.ratingBefore
-            val dtxt = if (d >= 0) "§a+$d" else "§c$d"
-            "${entry.ratingBefore} → §f$after  $dtxt"
-        } ?: "§8— did not count —"
+        row(g, left, ry, "Mode", "§f${entry.format.displayName}" + if (entry.rated) "" else " §8(casual)"); ry += ROW
+        val mmrLine = when {
+            // Unrated modes still carry the rating the player had at the time;
+            // rendering it as a before → after pair implies a swing that never
+            // happened.
+            !entry.rated -> "§8— casual, unrated —"
+            entry.ratingAfter == null -> "§8— did not count —"
+            else -> {
+                val after = entry.ratingAfter!!
+                val d = after - entry.ratingBefore
+                val dtxt = if (d >= 0) "§a+$d" else "§c$d"
+                "${entry.ratingBefore} → §f$after  $dtxt"
+            }
+        }
         row(g, left, ry, "MMR", mmrLine); ry += ROW
         if (entry.yourScore != null || entry.opponentScore != null) {
             row(g, left, ry, "Score", "§f${entry.yourScore ?: 0} §7— §f${entry.opponentScore ?: 0} §8items"); ry += ROW

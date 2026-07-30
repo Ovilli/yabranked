@@ -40,6 +40,25 @@ class PlayerProfileScreen(
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
         )
+        // Reporting is reachable from wherever a player is visible, not only
+        // from the screen that follows their last match against you. Never
+        // offered on your own profile — the backend would refuse it anyway,
+        // since it resolves the accused out of a match you both played.
+        if (uuid != RankedState.profile?.uuid) {
+            addRenderableWidget(
+                RankedButton(
+                    width / 2 - 100, height - 50, 96, 18,
+                    Component.literal("§cReport"), Ui.ICON_REPORT,
+                ) {
+                    Sfx.select()
+                    minecraft.setScreenAndShow(ReportScreen(this, matchId = null, opponentName = name, opponentUuid = uuid))
+                }
+            ).setTooltip(
+                net.minecraft.client.gui.components.Tooltip.create(
+                    Component.literal("Report $name for misconduct in your most recent match together")
+                )
+            )
+        }
         opened.once { Sfx.open() }
 
         val backend = RankedState.backend
@@ -64,7 +83,10 @@ class PlayerProfileScreen(
                 minecraft.execute {
                     history = hist
                     achievements = achs
-                    points = hist.filter { it.ratingAfter != null }
+                    // Casual matches carry the rating they were played at but
+                    // never moved it; charting them would draw flat runs that
+                    // look like the ladder stalled.
+                    points = hist.filter { it.rated && it.ratingAfter != null }
                         .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
                         .reversed()
                     versus = h2h
@@ -100,7 +122,10 @@ class PlayerProfileScreen(
         var belowY = CARD_TOP + CARD_HEIGHT + 8
         if (points.size >= 2) {
             Ui.eloChart(g, font, centerX - CARD_WIDTH / 2, belowY, CARD_WIDTH, 44, points, mouseX, mouseY)
-            val hint = "⤢ expand"
+            // Plain words, not a glyph: U+2922 is outside the default font's
+            // coverage and rendered as a missing-character box, so the one cue
+            // that the chart opens into a zoomable view read as an artefact.
+            val hint = "click to zoom"
             g.text(font, "§8$hint", centerX + CARD_WIDTH / 2 - 32 - font.width(hint) - 2, belowY + 1, Ui.TEXT_FAINT)
             chartTop = belowY
             belowY += 50
@@ -119,7 +144,12 @@ class PlayerProfileScreen(
 
         if (achievements.isNotEmpty()) belowY = drawAchievements(g, centerX, belowY + 4, mouseX, mouseY)
 
-        if (history.isNotEmpty()) drawDeepDive(g, centerX, belowY + 4, p)
+        if (history.isNotEmpty()) {
+            drawDeepDive(g, centerX, belowY + 4, p)
+            belowY += DEEP_DIVE_HEIGHT
+        }
+
+        if (p.modes.isNotEmpty()) drawModes(g, centerX, belowY + 4, p)
 
         Ui.fadeIn(g, width, height, openedAt)
     }
@@ -191,11 +221,15 @@ class PlayerProfileScreen(
         // history-derived peak too, or it would leak back the number we just hid.
         // Your own profile always shows real figures.
         val hideRating = p.hideRating && p.uuid != RankedState.profile?.uuid
-        val peak = if (hideRating) null else p.peakRating ?: history.mapNotNull { it.ratingAfter }.maxOrNull()
-        val bestStreak = longestWinRun()
-        val streak = currentStreak()
+        val ratedHistory = history.filter { it.rated }
+        val peak = if (hideRating) null else p.peakRating ?: ratedHistory.mapNotNull { it.ratingAfter }.maxOrNull()
+        // The server knows the real streaks — they span every mode and the whole
+        // season, not just the history window this screen happened to fetch.
+        // Fall back to the window only when the fields are hidden or absent.
+        val bestStreak = p.bestStreak ?: longestWinRun()
+        val streak = p.currentStreak?.takeIf { it > 0 } ?: currentStreak()
         val games = p.wins + p.losses + p.draws
-        val bestGain = history.mapNotNull { e -> e.ratingAfter?.let { it - e.ratingBefore } }.maxOrNull() ?: 0
+        val bestGain = ratedHistory.mapNotNull { e -> e.ratingAfter?.let { it - e.ratingBefore } }.maxOrNull() ?: 0
         val avgDur = history.mapNotNull { it.durationSeconds }.let { if (it.isEmpty()) null else it.average().toLong() }
         val avgOpp = history.mapNotNull { it.opponentRating }.let { if (it.isEmpty()) null else it.average().toInt() }
         val bestWin = history.filter { it.result == "win" }.mapNotNull { it.opponentRating }.maxOrNull()
@@ -225,6 +259,32 @@ class PlayerProfileScreen(
             val vy = gridY + (i / cols) * 20
             g.centeredText(font, s.second, cx, vy, Ui.WHITE)
             g.centeredText(font, "§8${s.first}", cx, vy + 9, Ui.TEXT_FAINT)
+        }
+    }
+
+    /**
+     * Per-mode breakdown: where the time actually went.
+     *
+     * Each mode carries its own ladder, so a rating here is that mode's, not the
+     * headline one; unrated modes simply have none and show their record and
+     * playtime instead.
+     */
+    private fun drawModes(g: GuiGraphicsExtractor, centerX: Int, y: Int, p: PlayerProfile) {
+        val left = centerX - CARD_WIDTH / 2
+        g.text(font, "§7BY MODE", left, y, Ui.TEXT_FAINT)
+        var row = y + 12
+        for (mode in p.modes.take(MODE_ROWS)) {
+            Ui.row(g, left, row, CARD_WIDTH, 14)
+            g.text(font, Ui.fit(font, mode.format.displayName, 96), left + 4, row + 3, Ui.WHITE)
+
+            val record = "${mode.wins}W·${mode.losses}L"
+            g.text(font, record, left + 104, row + 3, Ui.TEXT_DIM)
+
+            val rating = mode.rating?.let { "$it" } ?: "—"
+            g.text(font, rating, left + 150, row + 3, mode.tier?.let(Ui::tierColor) ?: Ui.TEXT_FAINT)
+
+            Ui.textRight(g, font, Ui.durationLong(mode.playtimeSeconds), left + CARD_WIDTH - 4, row + 3, Ui.TEXT_FAINT)
+            row += 15
         }
     }
 
@@ -289,7 +349,9 @@ class PlayerProfileScreen(
                 nameX += 12
             }
         }
-        g.text(font, p.name, nameX, CARD_TOP + 8, Ui.WHITE)
+        // Stops at the crest slot: a 16-character name in wide glyphs otherwise
+        // runs under it, and the flag has already eaten 12px of the run-up.
+        g.text(font, Ui.fit(font, p.name, padRight - 34 - nameX), nameX, CARD_TOP + 8, Ui.WHITE)
         g.text(font, p.tier, textLeft, CARD_TOP + 20, tierColor)
 
         // Another player who hid their rating shows a placeholder instead of the
@@ -311,7 +373,24 @@ class PlayerProfileScreen(
                 pipX += 5
             }
         } else {
-            g.text(font, "Season ${p.season}", textLeft, CARD_TOP + 44, Ui.TEXT_FAINT)
+            // Streak first, season second: form is what an opponent actually
+            // wants off this card, and the season number never changes.
+            val streak = p.currentStreak ?: 0
+            val secondary = if (streak >= 2) "§a$streak win streak" else "Season ${p.season}"
+            g.text(font, secondary, textLeft, CARD_TOP + 44, if (streak >= 2) Ui.WIN else Ui.TEXT_FAINT)
+        }
+
+        // Endorsement level sits opposite the crest: it is the other thing this
+        // player earned that is not their rating.
+        p.endorsement?.let { endorsement ->
+            val label = "E${endorsement.level}"
+            Ui.textRight(g, font, label, padRight, CARD_TOP + 44, Ui.ACCENT)
+            Ui.thinProgressBar(
+                g,
+                padRight - 28, CARD_TOP + 54, 28,
+                endorsement.progress.coerceIn(0f, 1f),
+                fillColor = Ui.ACCENT,
+            )
         }
 
         val record = "${p.wins}W · ${p.losses}L" +
@@ -348,5 +427,11 @@ class PlayerProfileScreen(
 
         /** Dim gold plate behind an earned-achievement chip. */
         const val ACHIEVEMENT_CHIP_BG = 0xFF3A2F12.toInt()
+
+        /** Height the career block occupies: header plus two rows of tiles. */
+        const val DEEP_DIVE_HEIGHT = 62
+
+        /** Modes listed before the block would run off a short screen. */
+        const val MODE_ROWS = 5
     }
 }

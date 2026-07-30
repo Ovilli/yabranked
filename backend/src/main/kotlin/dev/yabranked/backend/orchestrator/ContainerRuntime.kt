@@ -48,6 +48,17 @@ interface ContainerRuntime {
      * [namePrefix]. Used to sweep up match servers orphaned by a restart.
      */
     fun list(namePrefix: String): List<String>
+
+    /**
+     * Whether [name] is a container that is still running.
+     *
+     * False for a container that exited, and false for one that does not exist
+     * at all — the caller only ever asks about containers it started, so the two
+     * mean the same thing to it. Never throws: a runtime that cannot be reached
+     * answers `true`, because "docker is briefly unavailable" must not be read
+     * as "every live match has died".
+     */
+    fun isRunning(name: String): Boolean
 }
 
 class DockerCliRuntime : ContainerRuntime {
@@ -131,6 +142,21 @@ class DockerCliRuntime : ContainerRuntime {
     override fun remove(name: String) {
         val (exit, output) = exec("docker", "rm", "-f", name)
         if (exit != 0) log.warn("docker rm {} failed ({}): {}", name, exit, output)
+    }
+
+    override fun isRunning(name: String): Boolean {
+        val (exit, output) = runCatching {
+            exec("docker", "inspect", "-f", "{{.State.Running}}", name)
+        }.getOrElse {
+            log.warn("docker inspect {} failed", name, it)
+            // See the interface doc: an unreachable runtime is not evidence of a
+            // dead match, and answering false here would void every live one.
+            return true
+        }
+        // A non-zero exit is "no such container", which for a container we
+        // started is the same answer as "it exited and was removed".
+        if (exit != 0) return false
+        return output.trim().equals("true", ignoreCase = true)
     }
 
     override fun list(namePrefix: String): List<String> {
