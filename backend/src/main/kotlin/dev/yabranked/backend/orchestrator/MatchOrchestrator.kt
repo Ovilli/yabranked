@@ -187,9 +187,15 @@ class MatchOrchestrator(
             runCatching { matchService.voidMatch(match.id) }
                 .onFailure { log.error("could not void orphaned match ${match.id}", it) }
         }
+        // Only containers this orchestrator could have created. The name has to
+        // carry a match id, not merely start with the prefix: this list is fed
+        // straight into `remove`, so anything it wrongly matches is destroyed.
+        // It once ate a hand-run `yabranked-postgres` — the backend deleting its
+        // own database, twice, before the pattern was recognised.
         val leftovers = runCatching { runtime.list(CONTAINER_PREFIX) }
             .onFailure { log.error("could not list match containers", it) }
             .getOrDefault(emptyList())
+            .filter { name -> looksLikeMatchContainer(name) }
         for (name in leftovers) {
             log.warn("removing leftover match container {}", name)
             runtime.remove(name)
@@ -337,8 +343,25 @@ class MatchOrchestrator(
         runtime.remove(name)
     }
 
+    /**
+     * Whether [name] is one of ours to delete.
+     *
+     * The suffix must parse as a UUID. A prefix alone is not enough of a claim
+     * when the consequence of a false positive is `docker rm -f` on somebody
+     * else's container.
+     */
+    private fun looksLikeMatchContainer(name: String): Boolean =
+        name.startsWith(CONTAINER_PREFIX) &&
+            runCatching { java.util.UUID.fromString(name.removePrefix(CONTAINER_PREFIX)) }.isSuccess
+
     companion object {
-        /** Name prefix for every match container; also how the sweep finds them. */
-        const val CONTAINER_PREFIX = "yabranked-"
+        /**
+         * Name prefix for every match container; also how the sweep finds them.
+         *
+         * Specific on purpose. It used to be `yabranked-`, which matched anything
+         * else named for this project on the same host — a database container
+         * included — and the sweep deletes what it matches.
+         */
+        const val CONTAINER_PREFIX = "yabranked-match-"
     }
 }
