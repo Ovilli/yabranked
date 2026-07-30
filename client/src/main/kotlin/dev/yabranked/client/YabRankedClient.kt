@@ -443,7 +443,7 @@ class YabRankedClient : ClientModInitializer {
          * The property is checked before the environment variable so a single
          * launch can point somewhere else without touching the shell it inherits.
          */
-        const val DEFAULT_BACKEND_URL = "https://yabranked.onrender.com"
+        const val DEFAULT_BACKEND_URL = "https://yabranked.ovilli.de"
 
         val backendUrl: String =
             System.getProperty("yabranked.url")
