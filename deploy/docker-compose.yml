@@ -14,6 +14,7 @@ services:
       # Published on the host, not just to Caddy: match containers reach the
       # backend at `host.docker.internal:8080`, which resolves to the host.
       - "8080:8080"
+    networks: [yabranked-net]
     volumes:
       # The orchestrator starts match containers on *this* host's daemon.
       #
@@ -37,8 +38,16 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks: [yabranked-net]
     depends_on:
       - backend
+
+# Postgres and MinIO live outside this file — they are host services with their
+# own lifecycles, and a `compose down` here must not take a database with it.
+# Create once with: docker network create yabranked-net
+networks:
+  yabranked-net:
+    external: true
 
 volumes:
   caddy_data:
