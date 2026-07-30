@@ -247,11 +247,23 @@ fun main(args: Array<String>) {
     // The packets themselves never go in the database; see ReplayBlobStores.kt.
     // No directory configured means recordings live for as long as the process
     // does, which is the same bargain the in-memory stores make.
-    val replayBlobs = config.replayDir
-        ?.let { dev.yabranked.backend.store.FileReplayBlobStore(java.nio.file.Path.of(it)) }
-        ?: dev.yabranked.backend.store.InMemoryReplayBlobStore().also {
-            log.warn("no YABRANKED_REPLAY_DIR set — replay packet data is in memory and lost on restart")
-        }
+    // Object storage first, then a local disk, then memory. The order is the
+    // order of durability, and the last one is a fallback that says so.
+    val replayBlobs = dev.yabranked.backend.store.S3ReplayBlobStore.create(
+        endpoint = config.replayS3Endpoint,
+        bucket = config.replayS3Bucket,
+        accessKey = config.replayS3AccessKey,
+        secretKey = config.replayS3SecretKey,
+        region = config.replayS3Region,
+    )?.also { log.info("replay packet data in S3 bucket {}", config.replayS3Bucket) }
+        ?: config.replayDir
+            ?.let { dev.yabranked.backend.store.FileReplayBlobStore(java.nio.file.Path.of(it)) }
+            ?: dev.yabranked.backend.store.InMemoryReplayBlobStore().also {
+                log.warn(
+                    "no YABRANKED_REPLAY_DIR or YABRANKED_REPLAY_S3_BUCKET set — replay packet data is in " +
+                        "memory, capped, and lost on restart"
+                )
+            }
     val replaySweep = dev.yabranked.backend.store.ReplaySweep(replays, replayBlobs)
 
     val server = embeddedServer(Netty, port = config.port) {

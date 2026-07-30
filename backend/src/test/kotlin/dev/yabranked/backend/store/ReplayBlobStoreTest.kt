@@ -68,6 +68,27 @@ class ReplayBlobStoreTest {
     }
 
     @Test
+    fun `the in-memory store refuses to grow past its cap`() {
+        // The cap is what stops an unconfigured deployment killing its own
+        // backend: a recording is tens of megabytes and the heap is not.
+        val store = InMemoryReplayBlobStore(maxTotalBytes = 100)
+        val match = UUID.randomUUID()
+
+        assertEquals(60, store.append(match, 0, 0, ByteArray(60)))
+        // Refused, and answered with the unchanged length — which the agent reads
+        // as a stale offset, the same answer the retry protocol already handles.
+        assertEquals(60, store.append(match, 0, 60, ByteArray(60)))
+        assertEquals(60, store.length(match, 0))
+
+        // The cap is across every match, not per stream: one runaway recording
+        // must not be able to spend the whole budget twice.
+        val other = UUID.randomUUID()
+        assertEquals(0, store.append(other, 0, 0, ByteArray(60)))
+        // What still fits is still accepted.
+        assertEquals(30, store.append(other, 0, 0, ByteArray(30)))
+    }
+
+    @Test
     fun `total bytes counts every stream, and delete drops all of them`() {
         for ((name, store) in stores()) {
             val match = UUID.randomUUID()

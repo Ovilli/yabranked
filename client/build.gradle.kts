@@ -14,19 +14,32 @@ repositories {
     mavenCentral()
 }
 
+// Where `runClient` points. Overridable from the command line for pointing a dev
+// client at a staging backend: -PyabrankedLocalBackend=https://...
+val localBackend: String = (findProperty("yabrankedLocalBackend") as String?) ?: "http://localhost:8080"
+
 loom {
     // pure client-side mod: compile against the client distribution
     clientOnlyMinecraftJar()
 
     runs {
+        // Both dev clients point at a local backend explicitly.
+        //
+        // The mod's built-in default is the *published* service, because a
+        // shipped jar has to work with no configuration at all. That makes the
+        // override the development concern rather than the deployment one — and
+        // without these lines `runClient` would quietly queue against
+        // production, which is a bad way to find out.
         named("client") {
             programArgs("--username", "AliceDev")
+            vmArg("-Dyabranked.url=$localBackend")
         }
         // second instance for local 1v1 testing: own run dir + username
         create("client2") {
             client()
             runDir("run2")
             programArgs("--username", "BobDev")
+            vmArg("-Dyabranked.url=$localBackend")
         }
     }
 }

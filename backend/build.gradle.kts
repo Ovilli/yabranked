@@ -35,6 +35,16 @@ dependencies {
     implementation("com.zaxxer:HikariCP:7.0.2")
     implementation("org.postgresql:postgresql:42.7.7")
 
+    // Replay blobs on S3-compatible object storage (Cloudflare R2, MinIO, S3).
+    // The apache client is excluded in favour of the JDK one: this makes a
+    // handful of large requests, not thousands of small ones, and the default
+    // pulls in a second HTTP stack for no benefit here.
+    implementation("software.amazon.awssdk:s3:2.49.6") {
+        exclude(group = "software.amazon.awssdk", module = "apache-client")
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+    }
+    implementation("software.amazon.awssdk:url-connection-client:2.49.6")
+
     testImplementation(kotlin("test"))
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
     testImplementation("io.ktor:ktor-server-test-host:$ktorVersion")

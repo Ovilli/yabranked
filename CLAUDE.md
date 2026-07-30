@@ -155,6 +155,8 @@ The backend reads everything ad hoc via `System.getenv` in `Main.kt` — that fi
 
 `YABRANKED_SEED=1` loads the fixture ladder from `dev/Seeder.kt` for UI work; it refuses to run against Postgres.
 
-Client backend URL comes from `-Dyabranked.url`, then `$YABRANKED_URL`, defaulting to `http://localhost:8080`.
+Client backend URL comes from `-Dyabranked.url`, then `$YABRANKED_URL`, defaulting to `YabRankedClient.DEFAULT_BACKEND_URL` — the **published** service, not localhost. A shipped jar is the case that must work with no configuration: a player installing the mod has no system property to set. Development is the case that can be asked to configure itself, so `runClient`/`runClient2` pass `-Dyabranked.url` explicitly (override the target with `-PyabrankedLocalBackend=…`). Without those the dev clients would quietly queue against production.
+
+Replay packets go to S3-compatible storage when `YABRANKED_REPLAY_S3_BUCKET` and its access keys are set (`_ENDPOINT` for R2/MinIO, `_REGION` defaults to `auto`), else `YABRANKED_REPLAY_DIR`, else memory — which is now **capped** at `InMemoryReplayBlobStore.DEFAULT_MAX_TOTAL_BYTES`, because the failure mode of an unconfigured deploy was the heap, not the replays. S3 has no append, so each uploaded chunk is its own immutable object keyed by a zero-padded start offset; the padding is what makes S3's lexicographic listing and a byte-ordered walk the same thing.
 
 See `README.md` for the full local 2-client match walkthrough.

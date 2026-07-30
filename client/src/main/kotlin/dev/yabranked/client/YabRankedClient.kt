@@ -431,10 +431,24 @@ class YabRankedClient : ClientModInitializer {
             Thread(runnable, "yabranked-client-$id").apply { isDaemon = true }
         }
 
+        /**
+         * The live backend, overridable for development.
+         *
+         * The default is the published service rather than localhost, because a
+         * shipped jar is the case that has to work without configuration: a
+         * player installing the mod has no `-Dyabranked.url` to set and no reason
+         * to know one exists. Development is the case that *can* be asked to
+         * configure itself, so `runClient` passes the override instead.
+         *
+         * The property is checked before the environment variable so a single
+         * launch can point somewhere else without touching the shell it inherits.
+         */
+        const val DEFAULT_BACKEND_URL = "https://yabranked.onrender.com"
+
         val backendUrl: String =
             System.getProperty("yabranked.url")
                 ?: System.getenv("YABRANKED_URL")
-                ?: "http://localhost:8080"
+                ?: DEFAULT_BACKEND_URL
 
         val modVersion: String =
             FabricLoader.getInstance().getModContainer(MOD_ID)

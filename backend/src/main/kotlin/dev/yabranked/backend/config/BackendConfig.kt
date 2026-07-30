@@ -58,6 +58,18 @@ data class BackendConfig(
      * recordings on restart, the same bargain the in-memory stores make.
      */
     val replayDir: String?,
+    /**
+     * S3-compatible object storage for replay packets — Cloudflare R2, MinIO, S3.
+     *
+     * Preferred over [replayDir] when set, because the hosts that make sense for
+     * this service are the ones with no persistent disk. Endpoint may be null for
+     * real AWS, where the region determines it.
+     */
+    val replayS3Endpoint: String?,
+    val replayS3Bucket: String?,
+    val replayS3AccessKey: String?,
+    val replayS3SecretKey: String?,
+    val replayS3Region: String,
 ) {
     val usesPostgres: Boolean get() = databaseUrl != null
 
@@ -120,6 +132,12 @@ data class BackendConfig(
                 shutdownGraceSeconds = env.positiveLong("YABRANKED_SHUTDOWN_GRACE_SECONDS")
                     ?: DEFAULT_SHUTDOWN_GRACE_SECONDS,
                 replayDir = env.string("YABRANKED_REPLAY_DIR"),
+                replayS3Endpoint = env.string("YABRANKED_REPLAY_S3_ENDPOINT"),
+                replayS3Bucket = env.string("YABRANKED_REPLAY_S3_BUCKET"),
+                replayS3AccessKey = env.string("YABRANKED_REPLAY_S3_ACCESS_KEY"),
+                replayS3SecretKey = env.string("YABRANKED_REPLAY_S3_SECRET_KEY"),
+                // R2 ignores the region but the SDK insists on one.
+                replayS3Region = env.string("YABRANKED_REPLAY_S3_REGION") ?: "auto",
             )
         }
 

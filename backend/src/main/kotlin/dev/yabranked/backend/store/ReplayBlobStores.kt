@@ -126,18 +126,47 @@ class FileReplayBlobStore(private val root: Path) : ReplayBlobStore {
     }
 }
 
-/** In-memory [ReplayBlobStore] for tests and for a backend with no replay volume. */
-class InMemoryReplayBlobStore : ReplayBlobStore {
+/**
+ * In-memory [ReplayBlobStore] for tests and for a backend with no replay volume.
+ *
+ * **Capped, because this is what an unconfigured deployment gets.** A recording is
+ * 40–100 MB per player and is kept for the retention window, so on a small
+ * instance a couple of matches is the whole heap — and the failure mode of an
+ * uncapped store is not "replays stop working", it is the backend dying and
+ * taking every live match with it. Past [maxTotalBytes] appends are refused: the
+ * agent reads the unchanged length as a stale offset, which is exactly the
+ * "you are not where you think you are" answer the protocol already handles.
+ */
+class InMemoryReplayBlobStore(
+    /** Total across every match. 256 MB is generous for a 512 MB instance. */
+    private val maxTotalBytes: Long = DEFAULT_MAX_TOTAL_BYTES,
+) : ReplayBlobStore {
+    private val log = org.slf4j.LoggerFactory.getLogger("replays")
     private val streams = ConcurrentHashMap<UUID, ConcurrentHashMap<Int, ByteArray>>()
+    private val warned = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun length(matchId: UUID, index: Int): Long =
         (streams[matchId]?.get(index)?.size ?: 0).toLong()
+
+    /** Everything held, across every match. */
+    private fun heldBytes(): Long =
+        streams.values.sumOf { match -> match.values.sumOf { it.size.toLong() } }
 
     override fun append(matchId: UUID, index: Int, offset: Long, bytes: ByteArray): Long {
         val match = streams.computeIfAbsent(matchId) { ConcurrentHashMap() }
         synchronized(match) {
             val current = match[index] ?: ByteArray(0)
             if (offset != current.size.toLong()) return current.size.toLong()
+            if (heldBytes() + bytes.size > maxTotalBytes) {
+                if (warned.compareAndSet(false, true)) {
+                    log.warn(
+                        "in-memory replay storage is full at {} MB — recordings are being truncated. " +
+                            "Set YABRANKED_REPLAY_DIR or the S3 settings to keep them.",
+                        maxTotalBytes / (1024 * 1024),
+                    )
+                }
+                return current.size.toLong()
+            }
             val merged = current + bytes
             match[index] = merged
             return merged.size.toLong()
@@ -156,5 +185,15 @@ class InMemoryReplayBlobStore : ReplayBlobStore {
 
     override fun delete(matchId: UUID) {
         streams.remove(matchId)
+    }
+
+    companion object {
+        /**
+         * 256 MB across every match. Sized against the smallest instance anyone
+         * is likely to run this on rather than against how much a match wants:
+         * losing the tail of a recording is a bad replay, and running out of heap
+         * is a dead backend.
+         */
+        const val DEFAULT_MAX_TOTAL_BYTES = 256L * 1024 * 1024
     }
 }
