@@ -1,10 +1,33 @@
-FROM eclipse-temurin:25-jdk AS build
+# JDK 21, matching `jvmToolchain(21)` in both modules this builds.
+#
+# Not 25: Gradle would then have to *provision* a 21 toolchain, and the settings
+# file written below deliberately drops the foojay resolver that downloads one —
+# so it would fail with a toolchain error instead. Building on the version the
+# modules ask for means there is nothing to resolve. (The agent and client need
+# 25, and they are not built here.)
+FROM eclipse-temurin:21-jdk AS build
 WORKDIR /app
 
-# gradle.properties pins org.gradle.java.home to a local path; unset for CI
-COPY gradlew build.gradle.kts settings.gradle.kts gradle.properties gradle/ ./
+# The wrapper gets its own COPY. Naming `gradle/` alongside files in a single
+# COPY copies its *contents* into the destination, so the jar lands at
+# `wrapper/gradle-wrapper.jar` while gradlew looks under `gradle/wrapper/` —
+# "Could not find or load main class org.gradle.wrapper.GradleWrapperMain".
+COPY gradlew build.gradle.kts gradle.properties ./
+COPY gradle/ gradle/
 COPY proto/ proto/
 COPY backend/ backend/
+
+# Only the two modules the backend needs.
+#
+# The real settings file also includes `agent` and `client`, which apply
+# fabric-loom — and Gradle configures every included project even when the task
+# asked for is `:backend:installDist`. That would have this image resolving
+# Minecraft, a Java 25 toolchain and the Fabric maven in order to build an HTTP
+# service. Written here rather than copied so the build cannot quietly start
+# dragging the mods back in.
+RUN printf 'rootProject.name = "yabranked"\ninclude("proto")\ninclude("backend")\n' > settings.gradle.kts
+
+# gradle.properties pins org.gradle.java.home to a local path; unset for CI
 RUN sed -i '/^org\.gradle\.java\.home/d' gradle.properties && \
     ./gradlew :backend:installDist --no-daemon -x test
 
