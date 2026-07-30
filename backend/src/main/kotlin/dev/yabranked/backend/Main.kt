@@ -213,6 +213,7 @@ fun main(args: Array<String>) {
                 limits = ContainerLimits(memory = config.matchMemory, cpus = config.matchCpus),
                 noShowTimeoutSeconds = config.noShowTimeoutSeconds,
                 postgameSeconds = config.postgameSeconds,
+                portMap = config.portMap,
             ),
             runtime = DockerCliRuntime(),
             matchService = matchService,

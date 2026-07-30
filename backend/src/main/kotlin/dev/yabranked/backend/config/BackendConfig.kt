@@ -70,6 +70,14 @@ data class BackendConfig(
     val replayS3AccessKey: String?,
     val replayS3SecretKey: String?,
     val replayS3Region: String,
+    /**
+     * `localPort=publicHost:publicPort` pairs, comma separated, for hosts behind
+     * a tunnel rather than a port forward.
+     *
+     * Empty means ports are reachable under their own numbers, which is the
+     * ordinary case and stays the default.
+     */
+    val portMap: Map<Int, String>,
 ) {
     val usesPostgres: Boolean get() = databaseUrl != null
 
@@ -138,8 +146,26 @@ data class BackendConfig(
                 replayS3SecretKey = env.string("YABRANKED_REPLAY_S3_SECRET_KEY"),
                 // R2 ignores the region but the SDK insists on one.
                 replayS3Region = env.string("YABRANKED_REPLAY_S3_REGION") ?: "auto",
+                portMap = parsePortMap(env.string("YABRANKED_PORT_MAP")),
             )
         }
+
+        /**
+         * `25600=abc.playit.gg:45123,25601=abc.playit.gg:45124`.
+         *
+         * A malformed entry is dropped rather than guessed at: mapping a port to
+         * the wrong address sends players somewhere nobody is listening, which is
+         * a worse outcome than the match failing to provision at all.
+         */
+        internal fun parsePortMap(raw: String?): Map<Int, String> =
+            raw.orEmpty().split(',')
+                .mapNotNull { entry ->
+                    val local = entry.substringBefore('=', "").trim().toIntOrNull()
+                    val target = entry.substringAfter('=', "").trim()
+                    if (local == null || target.isEmpty() || !target.contains(':')) null
+                    else local to target
+                }
+                .toMap()
 
         /** Blank is treated as unset: an empty env var is how compose spells "no value". */
         private fun Env.string(name: String): String? = this(name)?.trim()?.takeIf { it.isNotEmpty() }

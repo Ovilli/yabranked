@@ -32,6 +32,20 @@ data class OrchestratorConfig(
     val backendUrlForAgents: String,
     val portRangeStart: Int = 25600,
     val portRangeSize: Int = 50,
+    /**
+     * Local port -> the address a client should actually dial, for hosts whose
+     * ports are not reachable under their own numbers.
+     *
+     * A tunnel (playit.gg, and anything else that avoids port forwarding) hands
+     * out a public host and port of *its* choosing and forwards them to a local
+     * port you pick. The two numbers rarely match, and `publicHost:localPort`
+     * then sends every player to a port nobody is listening on.
+     *
+     * When this is set it also *replaces* the port range: only mapped ports are
+     * allocatable, because an unmapped one is a match nobody can reach. That
+     * makes the size of the map the real cap on concurrent matches.
+     */
+    val portMap: Map<Int, String> = emptyMap(),
     /** Vanilla online-mode for match servers; disable only for local testing. */
     val onlineMode: Boolean = true,
     /**
@@ -192,8 +206,11 @@ class MatchOrchestrator(
      * then silently failed to bind.
      */
     private fun claimPort(matchId: String): Int? {
-        for (offset in 0 until config.portRangeSize) {
-            val port = config.portRangeStart + offset
+        // A mapped setup can only use ports the tunnel actually forwards.
+        val candidates =
+            if (config.portMap.isNotEmpty()) config.portMap.keys.sorted()
+            else (0 until config.portRangeSize).map { config.portRangeStart + it }
+        for (port in candidates) {
             if (portsInUse.add(port)) {
                 matchPorts[matchId] = port
                 return port
@@ -201,6 +218,10 @@ class MatchOrchestrator(
         }
         return null
     }
+
+    /** What a client is told to connect to for a match on [port]. */
+    private fun addressFor(port: Int): String =
+        config.portMap[port] ?: "${config.publicHost}:$port"
 
     /** The side-ordered roster as the agent's `YABRANKED_TEAMS` expects it. */
     private fun rosterJson(
@@ -286,7 +307,7 @@ class MatchOrchestrator(
                 limits = config.limits,
             )
             containers[match.id.toString()] = name
-            matchService.setServerAddress(match.id, "${config.publicHost}:$port")
+            matchService.setServerAddress(match.id, addressFor(port))
             metrics.provisioned()
             log.info("provisioned match {} on port {}", match.id, port)
         } catch (e: Exception) {
