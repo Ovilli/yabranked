@@ -27,9 +27,16 @@ COPY backend/ backend/
 # dragging the mods back in.
 RUN printf 'rootProject.name = "yabranked"\ninclude("proto")\ninclude("backend")\n' > settings.gradle.kts
 
-# gradle.properties pins org.gradle.java.home to a local path; unset for CI
+# gradle.properties pins org.gradle.java.home to a local path; unset for CI.
+#
+# `--no-watch-fs` is not tuning. Gradle's file-system watching does not survive
+# BuildKit's overlayfs: the same build that succeeds on a bind mount fails inside
+# the image with `Index -<huge> out of bounds for length <small>` — a hash used
+# as an index, i.e. corrupted internal state rather than anything wrong with the
+# source. Watching buys nothing in a container that is built once and thrown
+# away.
 RUN sed -i '/^org\.gradle\.java\.home/d' gradle.properties && \
-    ./gradlew :backend:installDist --no-daemon -x test
+    ./gradlew :backend:installDist --no-daemon --no-watch-fs -x test
 
 # The Docker CLI, for deployments that orchestrate matches.
 #
