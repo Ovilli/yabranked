@@ -12,8 +12,13 @@ services:
     env_file: .env
     ports:
       # Published on the host, not just to Caddy: match containers reach the
-      # backend at `host.docker.internal:8080`, which resolves to the host.
-      - "8080:8080"
+      # backend at `host.docker.internal:<this port>`, which resolves to the host.
+      #
+      # Configurable because 8080 is popular — AMP's panel takes it on the box
+      # this was first deployed to. Whatever it becomes,
+      # YABRANKED_BACKEND_URL_FOR_AGENTS has to agree with it, or match servers
+      # report their results into a closed port.
+      - "${BACKEND_HOST_PORT:-8080}:8080"
     networks: [yabranked-net]
     volumes:
       # The orchestrator starts match containers on *this* host's daemon.
