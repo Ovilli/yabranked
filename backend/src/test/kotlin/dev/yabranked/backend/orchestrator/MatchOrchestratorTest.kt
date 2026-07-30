@@ -117,7 +117,7 @@ class MatchOrchestratorTest {
 
             awaitTrue { runtime.started.isNotEmpty() }
             val (name, image, env) = runtime.started.first()
-            assertEquals("yabranked-${match.id}", name)
+            assertEquals("yabranked-match-${match.id}", name)
             assertEquals("yabranked-match:test", image)
             assertEquals(match.id.toString(), env["YABRANKED_MATCH_ID"])
             assertEquals(match.serverToken, env["YABRANKED_SERVER_TOKEN"])
@@ -160,7 +160,7 @@ class MatchOrchestratorTest {
             )
 
             awaitTrue { runtime.removed.isNotEmpty() }
-            assertEquals("yabranked-${match.id}", runtime.removed.first())
+            assertEquals("yabranked-match-${match.id}", runtime.removed.first())
         } finally {
             scope.cancel()
         }
@@ -190,7 +190,7 @@ class MatchOrchestratorTest {
             assertTrue(runtime.removed.isEmpty(), "the container was reaped before it could finish uploading")
 
             awaitTrue { runtime.removed.isNotEmpty() }
-            assertEquals("yabranked-${match.id}", runtime.removed.first())
+            assertEquals("yabranked-match-${match.id}", runtime.removed.first())
         } finally {
             scope.cancel()
         }
@@ -208,7 +208,7 @@ class MatchOrchestratorTest {
             matchService.voidMatch(match.id)
 
             awaitTrue(timeoutMs = 250) { runtime.removed.isNotEmpty() }
-            assertEquals("yabranked-${match.id}", runtime.removed.first())
+            assertEquals("yabranked-match-${match.id}", runtime.removed.first())
         } finally {
             scope.cancel()
         }
@@ -217,12 +217,31 @@ class MatchOrchestratorTest {
     @Test
     fun `reconcile voids matches orphaned by a restart and sweeps their containers`() {
         val match = createMatch() // no orchestrator running: nothing provisioned it
-        runtime.started.add(Triple("yabranked-leftover", "yabranked-match:test", emptyMap()))
+        val stale = "yabranked-match-${java.util.UUID.randomUUID()}"
+        runtime.started.add(Triple(stale, "yabranked-match:test", emptyMap()))
 
         orchestrator.reconcile()
 
         assertEquals(MatchStatus.VOIDED, matches.get(match.id)?.status)
-        assertTrue("yabranked-leftover" in runtime.removed, "leftover container not swept")
+        assertTrue(stale in runtime.removed, "leftover container not swept")
+    }
+
+    @Test
+    fun `reconcile leaves containers it did not create alone`() {
+        // The sweep feeds this list straight into `docker rm -f`. When the prefix
+        // was merely `yabranked-` it destroyed a database container named
+        // `yabranked-postgres` on the same host — twice — and each time it looked
+        // like Postgres had crashed rather than been deleted.
+        val bystanders = listOf(
+            "yabranked-postgres",
+            "yabranked-minio",
+            "yabranked-match-not-a-uuid",
+        )
+        bystanders.forEach { runtime.started.add(Triple(it, "someone-elses:image", emptyMap())) }
+
+        orchestrator.reconcile()
+
+        bystanders.forEach { assertTrue(it !in runtime.removed, "$it must not be swept") }
     }
 
     @Test
