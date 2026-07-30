@@ -162,10 +162,28 @@ data class BackendConfig(
                 .mapNotNull { entry ->
                     val local = entry.substringBefore('=', "").trim().toIntOrNull()
                     val target = entry.substringAfter('=', "").trim()
-                    if (local == null || target.isEmpty() || !target.contains(':')) null
-                    else local to target
+                    if (local == null || !isPlausibleAddress(target)) null else local to target
                 }
                 .toMap()
+
+        /**
+         * `host:port`, or a bare `host` when something else supplies the port.
+         *
+         * A bare hostname is not a mistake: a playit.gg "Minecraft Java" tunnel
+         * publishes an SRV record, and the client is then meant to connect
+         * without a port. Requiring a colon dropped those entries silently, which
+         * is the worst way to be wrong about a config value.
+         *
+         * A colon still has to be followed by a number, so `host:` and
+         * `host:abc` are rejected rather than passed on to a client that cannot
+         * dial them.
+         */
+        private fun isPlausibleAddress(target: String): Boolean {
+            if (target.isEmpty() || target.any { it.isWhitespace() }) return false
+            if (!target.contains(':')) return true
+            val port = target.substringAfterLast(':').toIntOrNull() ?: return false
+            return port in 1..65535 && target.substringBeforeLast(':').isNotEmpty()
+        }
 
         /** Blank is treated as unset: an empty env var is how compose spells "no value". */
         private fun Env.string(name: String): String? = this(name)?.trim()?.takeIf { it.isNotEmpty() }

@@ -36,8 +36,20 @@ class PortMapTest {
 
     @Test
     fun `malformed entries are dropped rather than guessed at`() {
-        // No port on the target, no '=', a non-numeric local port, an empty target.
-        val map = BackendConfig.parsePortMap("25600=hostwithoutport,nonsense,abc=host:1,25602=,25603=host:3")
+        // No '=', a non-numeric local port, an empty target, a non-numeric port,
+        // and a port out of range.
+        val map = BackendConfig.parsePortMap("nonsense,abc=host:1,25602=,25604=host:abc,25605=host:99999,25603=host:3")
         assertEquals(mapOf(25603 to "host:3"), map)
+    }
+
+    @Test
+    fun `a bare hostname is accepted, because SRV supplies the port`() {
+        // playit.gg's "Minecraft Java" tunnel publishes an SRV record and the
+        // client connects without a port. Requiring a colon dropped these
+        // silently — a config value wrong in the quietest possible way.
+        assertEquals(
+            mapOf(25600 to "abc.playit.gg", 25601 to "def.playit.gg:45124"),
+            BackendConfig.parsePortMap("25600=abc.playit.gg,25601=def.playit.gg:45124"),
+        )
     }
 }
