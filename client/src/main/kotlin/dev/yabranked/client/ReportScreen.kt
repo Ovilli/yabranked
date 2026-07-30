@@ -14,12 +14,19 @@ import net.minecraft.network.chat.Component
  */
 class ReportScreen(
     private val parent: Screen?,
-    private val matchId: String,
+    /** The match being reported, or null when reporting from a profile. */
+    private val matchId: String?,
     private val opponentName: String,
+    /**
+     * UUID of the player being reported. Required when [matchId] is null — the
+     * backend then resolves the most recent match the two shared — and optional
+     * otherwise, where it picks one opponent out of a team.
+     */
+    private val opponentUuid: String? = null,
 ) : Screen(Component.literal("Report Player")) {
 
     private var submitting = false
-    private var buttons = mutableListOf<RankedButton>()
+    private val buttons = mutableListOf<RankedButton>()
 
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
@@ -52,10 +59,16 @@ class ReportScreen(
 
         val minecraft = this.minecraft
         YabRankedClient.workers.execute {
-            val status = backend.submitReport(matchId, reason)
+            val status = backend.submitReport(matchId, reason, opponentUuid)
             minecraft.execute {
-                RankedState.lastMatchReported = true
-                RankedToast.showInfo("Report submitted", "We will review it soon.")
+                // Only the post-match button is gated on this flag; a report
+                // filed from a profile must not disable it for a different match.
+                if (matchId != null) RankedState.lastMatchReported = true
+                val ok = status == "Report submitted"
+                // The backend refuses a report it cannot attribute to a match,
+                // so "submitted" is the only outcome worth thanking them for.
+                if (ok) RankedToast.showInfo("Report submitted", "We will review it soon.")
+                else RankedToast.showError("Report not filed", status)
                 RankedState.statusMessage = status
                 onClose()
             }

@@ -87,6 +87,43 @@ object RankedState {
 
     var statusMessage: String? by renderThread(null)
 
+    // --- Social ---
+    // The party socket is the client's only source of party truth: the server
+    // pushes the whole [PartyView] on every change, so nothing here is ever
+    // edited locally in anticipation of a reply.
+
+    var party: PartyView? by renderThread(null)
+
+    /** An invite waiting for an answer; the newest one wins. */
+    var partyInvite: PartyInviteView? by renderThread(null)
+
+    /** Incoming friend requests, refreshed from the friends screen and pushed
+     *  live by the party socket while the player is in the menus. */
+    var friendRequests: Int by renderThread(0)
+
+    /**
+     * Bumped whenever the party socket brings news that makes a social list
+     * stale — a friend request arriving, a party changing shape.
+     *
+     * The friends screen fetches over HTTP, so a push cannot hand it the new
+     * row; it can only tell it that what it is showing is out of date. Screens
+     * compare this against the value they last loaded at and refetch when it
+     * moves, which is what makes an incoming request appear without the player
+     * having to leave the screen and come back.
+     */
+    var socialRevision: Int by renderThread(0)
+
+    /** True when the player leads the party — the only one who may change it. */
+    val isPartyLeader: Boolean
+        get() {
+            val view = party ?: return false
+            val self = profile?.uuid ?: return false
+            return view.leader == self
+        }
+
+    /** Whether the queue join should be a party join. */
+    val queueAsParty: Boolean get() = party != null && isPartyLeader
+
     // UI flags to drive context-sensitive shortcuts without querying MC internals.
     // Volatile rather than render-thread-only: they are read from the tick and
     // the network-disconnect callback, which is exactly where the value has to
@@ -94,9 +131,17 @@ object RankedState {
     @Volatile var onRankedScreen: Boolean = false
     @Volatile var onResultScreen: Boolean = false
 
-    /** True while [MatchResultLoadingScreen] is the active screen, so the
-     *  disconnect poll only replaces it if the player hasn't navigated away. */
+    /** True while a match result is being waited on, so the poll only replaces
+     *  the loading screen if the player hasn't navigated away. Distinct from
+     *  [resultLoadingVisible]: this says the wait is still on, that one says
+     *  whether the screen for it is actually up. */
     @Volatile var onResultLoading: Boolean = false
+
+    /** True while [MatchResultLoadingScreen] is the screen on show. Cleared by
+     *  its `removed()`, which is how the client tick learns that something —
+     *  vanilla's disconnect screen — has taken the screen from us and puts it
+     *  back. */
+    @Volatile var resultLoadingVisible: Boolean = false
 
     // Visual toggles, edited on RankedOptionsScreen and persisted via Config.
     // Plain fields on purpose: Config.load() writes them from onInitializeClient,

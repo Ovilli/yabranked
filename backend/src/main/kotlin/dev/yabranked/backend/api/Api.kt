@@ -29,7 +29,14 @@ import dev.yabranked.proto.ReportRequest
 import dev.yabranked.proto.SessionRequest
 import dev.yabranked.proto.SessionResponse
 import dev.yabranked.proto.VersusRecord
+import dev.yabranked.proto.MatchFormat
+import dev.yabranked.proto.MatchSide
+import dev.yabranked.proto.ModeStats
+import dev.yabranked.proto.PresenceState
+import dev.yabranked.proto.PrivacySettings
+import dev.yabranked.proto.Visibility
 import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.WebsocketDeserializeException
 import io.ktor.serialization.kotlinx.KotlinxWebsocketSerializationConverter
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -56,6 +63,7 @@ import io.ktor.server.websocket.sendSerialized
 import io.ktor.server.websocket.webSocket
 import io.ktor.websocket.close
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -88,6 +96,27 @@ private val PROVISION_TIMEOUT_NANOS =
  * only stops one endpoint loading an unbounded number of rows.
  */
 private const val VERSUS_WINDOW = 500
+
+/**
+ * Seconds a party member's queue socket tolerates not being in the queue before
+ * it gives up. Their socket and the leader's join race, and hanging up on the
+ * loser of that race would leave one member of a matched party never told where
+ * to connect.
+ */
+private const val OBSERVER_GRACE_TICKS = 5
+
+/**
+ * Whether [cause] means "that frame was not something this build can decode"
+ * rather than "this socket is gone" — the difference between skipping a frame
+ * and giving up on the connection.
+ *
+ * Two types, because Ktor's converter only raises its own for a frame of the
+ * wrong *shape*; a payload the serializer refuses (an unknown `type`
+ * discriminator, say, which is what a newer client's message looks like) comes
+ * straight out of kotlinx as a [SerializationException].
+ */
+internal fun isUndecodableFrame(cause: Throwable): Boolean =
+    cause is WebsocketDeserializeException || cause is SerializationException
 
 /** Numeric-dotted version compare; unparseable segments count as 0. */
 internal fun versionAtLeast(version: String, minimum: String): Boolean {
@@ -171,6 +200,15 @@ class ApiDependencies(
     val minClientVersion: String? = null,
     val seasons: SeasonService = SeasonService(),
     val reports: ReportStore = dev.yabranked.backend.store.InMemoryReportStore(),
+    /** Match recordings; see [replayApi] for who may read one. */
+    val replays: dev.yabranked.backend.store.ReplayStore =
+        dev.yabranked.backend.store.InMemoryReplayStore(),
+    /** The packet bytes those recordings consist of, which are not in the database. */
+    val replayBlobs: dev.yabranked.backend.store.ReplayBlobStore =
+        dev.yabranked.backend.store.InMemoryReplayBlobStore(),
+    /** How many replays a player may keep and how long the rest survive. */
+    val replayPolicy: dev.yabranked.backend.store.ReplayPolicy =
+        dev.yabranked.backend.store.ReplayPolicy(),
     val achievements: dev.yabranked.backend.store.AchievementStore =
         dev.yabranked.backend.store.InMemoryAchievementStore(),
     /** Shared secret for the admin endpoints; null disables them all. */
@@ -191,7 +229,54 @@ class ApiDependencies(
      * doing JDBC on Ktor's event loop; see [StoreDispatchers].
      */
     val storeDispatcher: CoroutineDispatcher = StoreDispatchers.default,
-)
+
+    // --- social ---
+    // Defaulted to in-memory so every existing construction site (and every
+    // test) keeps compiling and gets a working, if non-persistent, social layer.
+    val presence: dev.yabranked.backend.social.Presence = dev.yabranked.backend.social.Presence(),
+    val friendStore: dev.yabranked.backend.store.FriendStore =
+        dev.yabranked.backend.store.InMemoryFriendStore(),
+    val endorsementStore: dev.yabranked.backend.store.EndorsementStore =
+        dev.yabranked.backend.store.InMemoryEndorsementStore(),
+    val friends: dev.yabranked.backend.social.FriendService =
+        dev.yabranked.backend.social.FriendService(friendStore, players, matches, seasons),
+    val endorsements: dev.yabranked.backend.social.EndorsementService =
+        dev.yabranked.backend.social.EndorsementService(endorsementStore, matches),
+) {
+    /**
+     * The party registry. Built here rather than injected because it needs a
+     * view of the player stores that only this object can assemble, and because
+     * every route and the queue socket must share exactly one instance.
+     */
+    val parties: dev.yabranked.backend.social.PartyService =
+        dev.yabranked.backend.social.PartyService(
+            lookup = { uuid, format ->
+                val record = players.getPlayer(uuid)
+                if (record == null) null else {
+                    val stats = matchService.statsFor(uuid)
+                    val rating = matchService.ratingFor(uuid, format)
+                    dev.yabranked.backend.social.PartyPlayerSnapshot(
+                        ref = PlayerRef(
+                            uuid = record.uuid.toString(),
+                            name = record.name,
+                            country = record.country.takeIf { record.privacy.showCountry == Visibility.EVERYONE },
+                        ),
+                        rating = rating,
+                        tier = Tier.format(
+                            rating,
+                            isPlaced = matchService.placementMatchesRemaining(stats) <= 0,
+                        ),
+                        hideRating = record.privacy.showRating == Visibility.NOBODY,
+                        allowInvites = record.privacy.allowPartyInvites,
+                        friendsOnly = record.privacy.partyInvitesFromFriendsOnly,
+                        banned = record.isBanned,
+                    )
+                }
+            },
+            presence = presence,
+            areFriends = friends::areFriends,
+        )
+}
 
 @Serializable
 data class ReadyRequest(val matchId: String)
@@ -239,38 +324,93 @@ fun Application.rankedApi(deps: ApiDependencies) {
      */
     suspend fun <T> onStore(block: () -> T): T = withContext(deps.storeDispatcher) { block() }
 
+    /** The per-mode breakdown, newest ladders included, sorted by time spent. */
+    fun modeStatsOf(uuid: UUID, showRating: Boolean): List<ModeStats> =
+        deps.matchService.modesFor(uuid)
+            .filter { it.matchesPlayed > 0 }
+            .sortedByDescending { it.playtimeSeconds }
+            .map { row ->
+                // Only rated modes have a meaningful ladder position; a casual
+                // mode's rating column exists to keep the row shape uniform and
+                // must never be rendered as if it were one.
+                val rated = row.format.ranked && showRating
+                ModeStats(
+                    format = row.format,
+                    matchesPlayed = row.matchesPlayed,
+                    wins = row.wins,
+                    losses = row.losses,
+                    draws = row.draws,
+                    playtimeSeconds = row.playtimeSeconds,
+                    rating = row.rating.takeIf { rated },
+                    tier = if (rated) {
+                        Tier.format(
+                            row.rating,
+                            isPlaced = row.matchesPlayed >= deps.matchService.teamPlacementMatches,
+                        )
+                    } else null,
+                    currentStreak = row.currentStreak,
+                    bestStreak = row.bestStreak,
+                )
+            }
+
     /**
-     * Build a player's profile. When [redact] is set the player's own privacy
-     * preferences are applied for a public viewer: a hidden flag drops the
-     * country, a hidden rating zeroes the exact rating (and peak) while the
-     * derived tier is still shown. Own-profile responses pass redact = false so
-     * the player always sees their real numbers.
+     * Build a player's profile as [viewer] is allowed to see it.
+     *
+     * Every gated field goes through the subject's own [PrivacySettings]: the
+     * viewer's relationship to them (self, accepted friend, stranger) is
+     * resolved once and each [Visibility] decides its own field. A hidden
+     * rating still shows the derived tier — hiding the ladder position entirely
+     * would break matchmaking transparency — and everything else simply
+     * disappears rather than showing a stale or zeroed value.
+     *
+     * [redact] alone (no viewer) means "a stranger is asking", which is what
+     * the anonymous endpoints pass.
      */
-    suspend fun profileOf(uuid: UUID, redact: Boolean = false): PlayerProfile? = onStore {
+    suspend fun profileOf(uuid: UUID, redact: Boolean = false, viewer: UUID? = null): PlayerProfile? = onStore {
         val record = deps.players.getPlayer(uuid) ?: return@onStore null
         val stats = deps.matchService.statsFor(uuid)
         val placements = deps.matchService.placementMatchesRemaining(stats)
-        val hideRating = redact && record.hideRating
+
+        val isSelf = !redact || viewer == uuid
+        val isFriend = viewer != null && viewer != uuid && deps.friends.areFriends(viewer, uuid)
+        val privacy = record.privacy
+        fun visible(field: Visibility) = field.allows(isSelf, isFriend)
+
+        val showRating = visible(privacy.showRating)
+        val showStreak = visible(privacy.showStreak)
+        val tier = Tier.format(stats.rating, isPlaced = placements <= 0)
+
         PlayerProfile(
             uuid = record.uuid.toString(),
             name = record.name,
-            rating = if (hideRating) 0 else stats.rating,
+            rating = if (showRating) stats.rating else 0,
             placementMatchesRemaining = placements,
             wins = stats.wins,
             losses = stats.losses,
             draws = stats.draws,
-            tier = Tier.format(stats.rating, isPlaced = placements <= 0),
+            tier = tier,
             season = stats.season,
             // same threshold the leaderboard uses, so a player is never shown a
             // rank they do not hold on the ladder
             rank = deps.players.rankOf(uuid, stats.season, minMatches = deps.matchService.placementMatches),
-            country = if (redact && record.hideFlag) null else record.country,
+            country = record.country.takeIf { visible(privacy.showCountry) },
             background = record.background,
-            playtimeSeconds = stats.playtimeSeconds,
+            playtimeSeconds = if (visible(privacy.showPlaytime)) stats.playtimeSeconds else 0,
             forfeits = stats.forfeits,
-            peakRating = if (hideRating) null else maxOf(stats.peakRating, stats.rating),
+            peakRating = if (showRating) maxOf(stats.peakRating, stats.rating) else null,
             hideFlag = record.hideFlag,
             hideRating = record.hideRating,
+            // Own profile carries the real settings so the client can restore
+            // its toggles; a stranger gets the defaults, since the settings are
+            // themselves information about the account.
+            privacy = if (isSelf) privacy else PrivacySettings(),
+            modes = if (visible(privacy.showPlaytime)) modeStatsOf(uuid, showRating) else emptyList(),
+            currentStreak = if (showStreak) deps.matchService.winStreakOf(uuid) else null,
+            bestStreak = if (showStreak) deps.matchService.bestStreakOf(uuid) else null,
+            endorsement = if (visible(privacy.showEndorsements)) deps.endorsements.summaryFor(uuid) else null,
+            onlineStatus = deps.presence.stateOf(uuid).wire
+                .takeIf { visible(privacy.showOnlineStatus) && it != PresenceState.OFFLINE.wire },
+            isFriend = isFriend,
         )
     }
 
@@ -301,6 +441,22 @@ fun Application.rankedApi(deps: ApiDependencies) {
         return !decision.allowed
     }
 
+    /**
+     * Live queue sockets, so the party layer can tell a waiting client its
+     * search is over. Keyed by player: one queue socket per account.
+     */
+    val queueCancelSinks = java.util.concurrent.ConcurrentHashMap<UUID, (String) -> Unit>()
+
+    // A party whose roster changed under it cannot keep its queue entry: the
+    // match would be built a player short. PartyService decides that; this drops
+    // the ticket and tells everyone who was waiting on it.
+    deps.parties.onQueueCancelled { partyId, members, reason ->
+        launch {
+            deps.queueService.leaveParty(partyId)
+            for (member in members) queueCancelSinks[member]?.invoke(reason)
+        }
+    }
+
     fun isAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
         val expected = deps.adminToken ?: return false
         val given = call.request.headers["X-Admin-Token"] ?: return false
@@ -308,6 +464,11 @@ fun Application.rankedApi(deps: ApiDependencies) {
     }
 
     routing {
+        // friends, parties, endorsements and the per-mode leaderboards
+        socialApi(deps)
+        // match recordings: agent upload, playback, saving, moderator review
+        replayApi(deps)
+
         post("/v1/auth/session") {
             // Two budgets, both before any work: this endpoint proxies straight
             // to Mojang's hasJoined (so it is an amplifier, and getting the
@@ -366,41 +527,57 @@ fun Application.rankedApi(deps: ApiDependencies) {
                         return@put
                     }
             }
-            val record = onStore { deps.players.getPlayer(self) }
-            if (record == null) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
-                return@put
-            }
-            // "country" present (even blank) → set/clear; absent → keep as-is.
-            val country = if (update.country == null) record.country else newCountry
-            // background: the id ends up in a client-side texture path, so only
-            // ones we ship art for are allowed through.
-            val background = when (val b = update.background) {
-                null -> record.background
-                else -> if (b.isBlank()) "default" else Backgrounds.normalize(b) ?: run {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "unknown background"))
-                    return@put
+            // Read and write are one transaction over one locked row.
+            // upsertPlayer replaces every column, so reading the record in one
+            // dispatcher hop and writing it back in a later one put back
+            // whatever landed in between — an admin ban issued while the player
+            // sat on their settings screen was simply erased by their next save.
+            val failure: Pair<HttpStatusCode, String>? = onStore {
+                deps.matchService.transactionRunner.transaction {
+                    val record = deps.players.getPlayerForUpdate(self)
+                        ?: return@transaction HttpStatusCode.NotFound to "unknown player"
+                    // background: the id ends up in a client-side texture path,
+                    // so only ones we ship art for are allowed through.
+                    val background = when (val b = update.background) {
+                        null -> record.background
+                        else -> if (b.isBlank()) "default" else Backgrounds.normalize(b)
+                            ?: return@transaction HttpStatusCode.BadRequest to "unknown background"
+                    }
+                    // "country" present (even blank) → set/clear; absent → keep as-is.
+                    val country = if (update.country == null) record.country else newCountry
+                    // Privacy. The whole block wins when the client sends one; the two
+                    // legacy booleans are folded into it otherwise, so an old client and
+                    // a new one can never leave the two views disagreeing.
+                    val privacy = update.privacy ?: record.privacy.copy(
+                        showCountry = when (update.hideFlag) {
+                            null -> record.privacy.showCountry
+                            true -> Visibility.NOBODY
+                            false -> Visibility.EVERYONE
+                        },
+                        showRating = when (update.hideRating) {
+                            null -> record.privacy.showRating
+                            true -> Visibility.NOBODY
+                            false -> Visibility.EVERYONE
+                        },
+                    )
+                    deps.players.upsertPlayer(
+                        record.copy(country = country, background = background).withPrivacy(privacy),
+                    )
+                    null
                 }
             }
-            // Privacy toggles: null leaves the current setting untouched.
-            val hideFlag = update.hideFlag ?: record.hideFlag
-            val hideRating = update.hideRating ?: record.hideRating
-            onStore {
-                deps.players.upsertPlayer(
-                    record.copy(
-                        country = country,
-                        background = background,
-                        hideFlag = hideFlag,
-                        hideRating = hideRating,
-                    ),
-                )
+            if (failure != null) {
+                call.respond(failure.first, mapOf("error" to failure.second))
+                return@put
             }
             call.respond(profileOf(self)!!)
         }
 
         get("/v1/players/{uuid}") {
             val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
-            val profile = uuid?.let { profileOf(it, redact = true) }
+            // Signing the request in is optional, but it is what lets a friend
+            // see the friends-only fields.
+            val profile = uuid?.let { profileOf(it, redact = true, viewer = authedPlayer(call)) }
             if (profile == null) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
             } else {
@@ -509,41 +686,51 @@ fun Application.rankedApi(deps: ApiDependencies) {
             val season = call.request.queryParameters["season"]?.toIntOrNull()
                 ?: deps.seasons.currentSeason
 
-            // one hop, and the opponents' names come back in a single lookup
-            // rather than one per row
+            val viewer = authedPlayer(call)
+            // one hop, and every participant's name comes back in a single
+            // lookup rather than one per row
             val page = uuid?.let {
                 onStore {
-                    if (deps.players.getPlayer(it) == null) return@onStore null
+                    val record = deps.players.getPlayer(it) ?: return@onStore null
+                    val isSelf = viewer == it
+                    val isFriend = viewer != null && !isSelf && deps.friends.areFriends(viewer, it)
+                    if (!record.privacy.showMatchHistory.allows(isSelf, isFriend)) {
+                        return@onStore Triple(emptyList(), emptyMap(), false)
+                    }
                     val records = deps.matches.historyFor(it, season, limit)
-                    val opponents = deps.players.getPlayers(
-                        records.map { match -> if (match.playerA == it) match.playerB else match.playerA }
-                    )
-                    records to opponents
+                    // every side of every row, not just the two captains
+                    val people = deps.players.getPlayers(records.flatMap { match -> match.participants })
+                    Triple(records, people, isSelf)
                 }
             }
             if (page == null) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
                 return@get
             }
-            val (records, opponents) = page
+            val (records, people, isSelf) = page
+
+            fun refOf(other: UUID): PlayerRef {
+                val record = people[other]
+                return PlayerRef(
+                    other.toString(),
+                    record?.name ?: "?",
+                    country = record?.country.takeIf { record?.privacy?.showCountry == Visibility.EVERYONE },
+                )
+            }
 
             val history = records.map { match ->
-                val isTeamA = match.playerA == uuid
-                val opponentUuid = if (isTeamA) match.playerB else match.playerA
-                val opponent = opponents[opponentUuid]
-                val result = when (match.outcome) {
-                    MatchOutcome.VOID, null -> "void"
-                    MatchOutcome.DRAW -> "draw"
-                    MatchOutcome.TEAM_A_WIN -> if (isTeamA) "win" else "loss"
-                    MatchOutcome.TEAM_B_WIN -> if (isTeamA) "loss" else "win"
+                val isTeamA = match.sideOf(uuid!!) == 0
+                val enemies = match.opponentsOf(uuid)
+                val opponentUuid = enemies.firstOrNull() ?: if (isTeamA) match.playerB else match.playerA
+                val result = when {
+                    match.outcome == null || match.outcome == MatchOutcome.VOID -> "void"
+                    match.outcome == MatchOutcome.DRAW -> "draw"
+                    match.didWin(uuid) -> "win"
+                    else -> "loss"
                 }
                 MatchHistoryEntry(
                     matchId = match.id.toString(),
-                    opponent = PlayerRef(
-                        opponentUuid.toString(),
-                        opponent?.name ?: "?",
-                        country = if (opponent?.hideFlag == true) null else opponent?.country,
-                    ),
+                    opponent = refOf(opponentUuid),
                     result = result,
                     ratingBefore = if (isTeamA) match.ratingABefore else match.ratingBBefore,
                     ratingAfter = if (isTeamA) match.ratingAAfter else match.ratingBAfter,
@@ -556,12 +743,106 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     cardSeed = match.settings.cardSeed,
                     wasForfeit = match.forfeitedBy != null,
                     forfeitedByYou = match.forfeitedBy == uuid,
+                    format = match.format,
+                    // Both halves matter: a casual format is never rated, and a
+                    // rated format played unrated by a party is not either.
+                    rated = match.rated && match.format.ranked,
+                    teammates = match.teammatesOf(uuid).map(::refOf),
+                    opponents = enemies.map(::refOf),
+                    // only ever offered on your own history: endorsing is an
+                    // action, and nobody else can take it for you
+                    canEndorse = isSelf && deps.endorsements.canEndorse(uuid, match.id),
                 )
             }
             call.respond(history)
         }
 
-        // Player report: accused is always the opponent in the given match.
+        /*
+         * The match this player is in right now, or 204 when there is none.
+         *
+         * The client's idea of "I am in a match" is set when it is told about
+         * one and cleared when it is disconnected from the match server. That
+         * covers the ordinary path and nothing else: a match that ends while the
+         * player is sitting in the menus — a teammate forfeiting, the
+         * orchestrator reaping a server that never came up — produces no
+         * disconnect, so the client went on believing the match was live and
+         * offered nothing but "Forfeit". This is the one question that unwedges
+         * it, and it recovers a client that was restarted mid-match too.
+         */
+        get("/v1/players/me/match") {
+            val player = authedPlayer(call)
+            if (player == null) {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "login required"))
+                return@get
+            }
+            val live = onStore { deps.matches.liveFor(player) }
+            if (live == null) {
+                call.respond(HttpStatusCode.NoContent)
+                return@get
+            }
+            // The same payload the queue socket pushes, from the same builder:
+            // a client that reconnects into a running match must see exactly
+            // what it would have seen had it never left.
+            call.respond(onStore { buildMatchFound(deps, player, live) })
+        }
+
+        /*
+         * Concede a match from the client.
+         *
+         * The match server has a `/forfeit` command, but reaching it means being
+         * connected to the container. A player who crashed out, alt-F4'd, or
+         * simply backed out to the ranked menu cannot, and their opponent was
+         * left waiting out the abandon timer for a match both of them had
+         * already finished with. This is the same act over the one channel that
+         * is always available.
+         *
+         * Nothing here can express anything but "I lose", so participation is
+         * the whole authorization.
+         */
+        post("/v1/matches/{id}/forfeit") {
+            val player = authedPlayer(call)
+            if (player == null) {
+                call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "login required"))
+                return@post
+            }
+            val matchId = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
+            if (matchId == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "malformed match id"))
+                return@post
+            }
+            when (val result = onStore { deps.matchService.forfeit(matchId, player) }) {
+                is MatchService.SettleResult.Settled ->
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "forfeited"))
+                // Both read as "not your match" on the wire: telling a stranger
+                // which match ids exist is not something this endpoint owes them.
+                MatchService.SettleResult.UnknownMatch,
+                MatchService.SettleResult.NotAParticipant ->
+                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
+                // Racing the agent's own report is the normal case when a player
+                // quits the container: whoever lands first decides, and the
+                // outcome is the same either way.
+                MatchService.SettleResult.AlreadySettled ->
+                    call.respond(HttpStatusCode.Conflict, mapOf("error" to "that match is already over"))
+                MatchService.SettleResult.BadToken ->
+                    call.respond(HttpStatusCode.Conflict, mapOf("error" to "that match is already over"))
+                is MatchService.SettleResult.InvalidReport ->
+                    call.respond(HttpStatusCode.Conflict, mapOf("error" to result.reason))
+            }
+        }
+
+        /*
+         * Player report.
+         *
+         * Two ways in, one rule: the accused is whoever the *match roster* says
+         * was on the other side. The client may name them, but only to pick one
+         * opponent out of a team — a uuid that is not an opponent of the
+         * reporter in that match is refused rather than recorded.
+         *
+         * With no match id the report came from a profile, so the backend finds
+         * the most recent decided match the two shared. That is what makes
+         * "report this player" reachable from anywhere they are visible, instead
+         * of only from the screen that happens to follow their last match.
+         */
         post("/v1/reports") {
             val reporter = authedPlayer(call)
             if (reporter == null) {
@@ -569,15 +850,45 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 return@post
             }
             val request = call.receive<ReportRequest>()
-            val matchId = runCatching { UUID.fromString(request.matchId) }.getOrNull()
-            val match = matchId?.let { onStore { deps.matches.get(it) } }
-            if (match == null || (match.playerA != reporter && match.playerB != reporter)) {
+            val namedAccused = request.accused?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            val matchId = request.matchId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
+            if (matchId == null && namedAccused == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "a match id or an accused player is required"))
+                return@post
+            }
+
+            val match = onStore {
+                if (matchId != null) deps.matches.get(matchId)
+                // Newest shared match, across every mode: the thing being
+                // reported is behaviour, and it does not stop being reportable
+                // because it happened in a casual game.
+                else deps.matches
+                    .between(reporter, namedAccused!!, deps.seasons.currentSeason, limit = 1)
+                    .firstOrNull()
+            }
+            // Membership through the roster, not playerA/playerB: those are only
+            // each side's first player once teams exist, so four of a 3v3's six
+            // players could not file a report at all.
+            if (match == null || match.sideOf(reporter) == null) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
                 return@post
             }
-            val accused = if (match.playerA == reporter) match.playerB else match.playerA
+            val opponents = match.opponentsOf(reporter)
+            val accused = when {
+                namedAccused != null && namedAccused in opponents -> namedAccused
+                namedAccused != null ->
+                    return@post call.respond(
+                        HttpStatusCode.BadRequest,
+                        mapOf("error" to "that player was not on the other side of this match"),
+                    )
+                else -> opponents.firstOrNull()
+            }
+            if (accused == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
+                return@post
+            }
             val filed = onStore {
-                if (deps.reports.existsFor(match.id, reporter)) return@onStore false
+                if (deps.reports.existsFor(match.id, reporter, accused)) return@onStore false
                 deps.reports.insert(
                     ReportRecord(
                         id = UUID.randomUUID(),
@@ -588,6 +899,11 @@ fun Application.rankedApi(deps: ApiDependencies) {
                         createdAt = java.time.Instant.now(),
                     )
                 )
+                // A reported match's recording is what a moderator will actually
+                // judge the accusation on, so it stops being subject to the
+                // retention sweep the moment the report exists — and stays that
+                // way whatever the players do with their own copies.
+                deps.replays.setUnderReview(match.id, true)
                 true
             }
             if (!filed) {
@@ -640,10 +956,14 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 return@post
             }
             val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
+            // Same locked read-modify-write as the profile editor: a ban that
+            // races the player's own save must not be the one that loses.
             val banned = uuid != null && onStore {
-                val player = deps.players.getPlayer(uuid) ?: return@onStore false
-                deps.players.upsertPlayer(player.copy(bannedAt = java.time.Instant.now()))
-                true
+                deps.matchService.transactionRunner.transaction {
+                    val player = deps.players.getPlayerForUpdate(uuid) ?: return@transaction false
+                    deps.players.upsertPlayer(player.copy(bannedAt = java.time.Instant.now()))
+                    true
+                }
             }
             if (uuid == null || !banned) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
@@ -672,9 +992,11 @@ fun Application.rankedApi(deps: ApiDependencies) {
             val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
             val unbanned = uuid?.let {
                 onStore {
-                    val player = deps.players.getPlayer(it) ?: return@onStore false
-                    deps.players.upsertPlayer(player.copy(bannedAt = null))
-                    true
+                    deps.matchService.transactionRunner.transaction {
+                        val player = deps.players.getPlayerForUpdate(it) ?: return@transaction false
+                        deps.players.upsertPlayer(player.copy(bannedAt = null))
+                        true
+                    }
                 }
             }
             if (unbanned != true) {
@@ -739,6 +1061,11 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "bad token"))
                 MatchService.SettleResult.UnknownMatch ->
                     call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown match"))
+                // Only the player-facing forfeit endpoint can produce this; an
+                // agent authenticates with the match's own token, not as a
+                // participant.
+                MatchService.SettleResult.NotAParticipant ->
+                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "not a participant"))
             }
         }
 
@@ -777,7 +1104,18 @@ fun Application.rankedApi(deps: ApiDependencies) {
             // them on the way out — otherwise a second socket for the same
             // account kicks the first one out of the queue when it closes.
             var ownsQueueEntry = false
+            /** This socket belongs to a party member who is not the leader. */
+            var observing = false
+            /** The party whose ticket this socket is riding, leader or not. */
+            var queuedParty: UUID? = null
             val leaveRequested = java.util.concurrent.atomic.AtomicBoolean(false)
+
+            // The party layer cancels a search when the roster changes under it
+            // (the leader left, a member dropped). Without this the client would
+            // sit on a spinner for a queue entry that no longer exists.
+            val cancelled = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val cancelSink: (String) -> Unit = { reason -> cancelled.set(reason) }
+            queueCancelSinks[playerUuid] = cancelSink
 
             try {
                 val join = receiveDeserialized<QueueClientMessage>()
@@ -785,17 +1123,66 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     sendSerialized<QueueServerMessage>(QueueServerMessage.QueueError("expected join_queue"))
                     return@webSocket
                 }
-                ownsQueueEntry = deps.queueService.join(
-                    playerUuid,
-                    onStore { deps.matchService.statsFor(playerUuid).rating },
-                    join.format,
-                )
-                if (!ownsQueueEntry) {
+                if (!join.format.playable || join.format.partyOnly) {
+                    sendSerialized<QueueServerMessage>(
+                        QueueServerMessage.QueueError("that mode cannot be queued for")
+                    )
+                    return@webSocket
+                }
+
+                // A party queues as one ticket so it is never split across two
+                // matches, and only its leader may push the button.
+                val partyId = if (join.asParty) deps.parties.partyIdOf(playerUuid) else null
+                if (join.asParty && partyId == null) {
+                    sendSerialized<QueueServerMessage>(QueueServerMessage.QueueError("you are not in a party"))
+                    return@webSocket
+                }
+                // Only the leader's socket enqueues; every other member's socket
+                // rides along on the same ticket, watching for the match. They
+                // must not be refused — a member with no socket would never be
+                // told where the match server is.
+                observing = partyId != null && !deps.parties.isLeader(playerUuid)
+
+                ownsQueueEntry = if (partyId == null || observing) {
+                    if (observing) false else deps.queueService.join(
+                        playerUuid,
+                        onStore { deps.matchService.ratingFor(playerUuid, join.format) },
+                        join.format,
+                    )
+                } else {
+                    val members = deps.parties.membersOf(partyId)
+                    if (members.size != join.format.teamSize) {
+                        sendSerialized<QueueServerMessage>(
+                            QueueServerMessage.QueueError(
+                                "${join.format.displayName} needs exactly ${join.format.teamSize} players"
+                            )
+                        )
+                        return@webSocket
+                    }
+                    val rated = onStore {
+                        members.map { it to deps.matchService.ratingFor(it, join.format) }
+                    }
+                    // Freeze the roster first: a member accepted into the party
+                    // between these two calls would be in the party but not on
+                    // the ticket.
+                    if (!deps.parties.setQueued(partyId, true)) {
+                        sendSerialized<QueueServerMessage>(
+                            QueueServerMessage.QueueError("the party cannot start right now")
+                        )
+                        return@webSocket
+                    }
+                    deps.queueService.joinAsParty(partyId, rated, join.format).also {
+                        if (!it) deps.parties.setQueued(partyId, false)
+                    }
+                }
+                if (!ownsQueueEntry && !observing) {
                     sendSerialized<QueueServerMessage>(
                         QueueServerMessage.QueueError("already queued in another session")
                     )
                     return@webSocket
                 }
+                deps.presence.set(playerUuid, PresenceState.QUEUE)
+                queuedParty = partyId
 
                 // Read the rest of the client's messages concurrently: the
                 // push loop below never yields to receive, so leave_queue would
@@ -803,22 +1190,38 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 val reader = launch {
                     try {
                         while (true) {
-                            if (receiveDeserialized<QueueClientMessage>() is QueueClientMessage.LeaveQueue) {
+                            val message = try {
+                                receiveDeserialized<QueueClientMessage>()
+                            } catch (e: Exception) {
+                                if (!isUndecodableFrame(e)) throw e
+                                // Skip the frame, not the loop. Dropping out of
+                                // here left the only reader of leave_queue dead
+                                // while the push loop happily kept the socket
+                                // open: the client's Cancel was never seen, and
+                                // it sat on a spinner it could no longer leave.
+                                call.application.log.debug("queue socket: undecodable frame ignored", e)
+                                continue
+                            }
+                            if (message is QueueClientMessage.LeaveQueue) {
                                 leaveRequested.set(true)
                                 return@launch
                             }
                         }
                     } catch (_: ClosedReceiveChannelException) {
                         // socket closed; the push loop notices via its own send
-                    } catch (_: Exception) {
-                        // malformed frame — ignore, the client can retry
+                    } catch (e: Exception) {
+                        // the socket itself is gone; the push loop and the
+                        // finally block are what clean up after it
+                        call.application.log.debug("queue socket reader ended", e)
                     }
                 }
 
                 // push queue state until matched or the client disconnects/leaves
-                while (matched.get() == null && !leaveRequested.get()) {
+                var missedSnapshots = 0
+                while (matched.get() == null && !leaveRequested.get() && cancelled.get() == null) {
                     val snapshot = deps.queueService.snapshot(playerUuid)
                     if (snapshot != null) {
+                        missedSnapshots = 0
                         sendSerialized<QueueServerMessage>(
                             QueueServerMessage.QueueState(
                                 position = snapshot.position,
@@ -828,15 +1231,34 @@ fun Application.rankedApi(deps: ApiDependencies) {
                             )
                         )
                     } else if (matched.get() == null) {
-                        // not in queue and not matched -> left elsewhere; end session
-                        ownsQueueEntry = false
-                        break
+                        // not in queue and not matched -> left elsewhere; end
+                        // session. A party member's socket may legitimately open
+                        // a beat before the leader's join lands, so give those a
+                        // short grace rather than hanging up on the race.
+                        missedSnapshots++
+                        if (!observing || missedSnapshots > OBSERVER_GRACE_TICKS) {
+                            ownsQueueEntry = false
+                            break
+                        }
                     }
                     delay(1.seconds)
                 }
                 reader.cancel()
+
+                cancelled.get()?.let { reason ->
+                    sendSerialized<QueueServerMessage>(QueueServerMessage.QueueCancelled(reason))
+                    ownsQueueEntry = false
+                    return@webSocket
+                }
                 if (leaveRequested.get()) {
-                    deps.queueService.leave(playerUuid)
+                    // A leader cancelling takes the whole party's ticket with
+                    // them; a member cancelling only leaves their own.
+                    if (ownsQueueEntry && queuedParty != null) {
+                        deps.queueService.leaveParty(queuedParty)
+                        deps.parties.setQueued(queuedParty, false)
+                    } else {
+                        deps.queueService.leave(playerUuid)
+                    }
                     ownsQueueEntry = false
                     return@webSocket
                 }
@@ -875,33 +1297,41 @@ fun Application.rankedApi(deps: ApiDependencies) {
                         return@let
                     }
 
-                    val isTeamA = ready.playerA == playerUuid
-                    val opponentUuid = if (isTeamA) ready.playerB else ready.playerA
-                    val opponent = onStore { deps.players.getPlayer(opponentUuid) }
-                    val opponentProfile = profileOf(opponentUuid, redact = true)
+                    // Same payload the party path sends; built in one place
+                    // so the two cannot describe the same match differently.
                     sendSerialized<QueueServerMessage>(
-                        QueueServerMessage.MatchFound(
-                            matchId = ready.id.toString(),
-                            team = if (isTeamA) MatchTeam.TEAM_A else MatchTeam.TEAM_B,
-                            opponent = PlayerRef(
-                                opponentUuid.toString(),
-                                opponent?.name ?: "?",
-                                country = if (opponent?.hideFlag == true) null else opponent?.country,
-                            ),
-                            serverAddress = ready.serverAddress!!,
-                            // redacted profile already zeroes a hidden rating; tier stays.
-                            opponentRating = opponentProfile?.rating ?: 0,
-                            opponentTier = opponentProfile?.tier ?: "Unranked",
-                        )
+                        onStore { buildMatchFound(deps, playerUuid, ready) }
                     )
                 }
             } catch (_: ClosedReceiveChannelException) {
                 // client disconnected
             } finally {
                 deps.queueService.removeListener(listener)
-                // matched players were already dequeued by the tick that paired
-                // them; leaving here would only dequeue someone else's entry
-                if (ownsQueueEntry && matched.get() == null) deps.queueService.leave(playerUuid)
+                queueCancelSinks.remove(playerUuid, cancelSink)
+                // NonCancellable is load-bearing, not defensive. A socket that
+                // drops cancels this coroutine, and every call below suspends on
+                // the queue mutex — which in a cancelled coroutine throws
+                // instead of running. The player's entry then leaks: they stay
+                // queued with no socket, every reconnect is refused as "already
+                // queued in another session", and the client retries forever.
+                withContext(NonCancellable) {
+                    // matched players were already dequeued by the tick that paired
+                    // them; leaving here would only dequeue someone else's entry
+                    if (ownsQueueEntry && matched.get() == null) {
+                        if (queuedParty != null) {
+                            deps.queueService.leaveParty(queuedParty)
+                            deps.parties.setQueued(queuedParty, false)
+                        } else {
+                            deps.queueService.leave(playerUuid)
+                        }
+                    }
+                    deps.presence.set(
+                        playerUuid,
+                        if (matched.get() != null) PresenceState.MATCH
+                        else if (deps.parties.partyIdOf(playerUuid) != null) PresenceState.PARTY
+                        else PresenceState.MENUS,
+                    )
+                }
             }
         }
     }

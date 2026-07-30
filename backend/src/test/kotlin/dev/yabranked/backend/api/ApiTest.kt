@@ -14,6 +14,7 @@ import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchResultReport
 import dev.yabranked.proto.PlayerProfile
+import dev.yabranked.proto.QueueServerMessage
 import dev.yabranked.proto.SessionRequest
 import dev.yabranked.proto.SessionResponse
 import io.ktor.client.call.body
@@ -131,5 +132,109 @@ class ApiTest {
         assertEquals(2, leaderboard.size)
         assertEquals("Anna", leaderboard[0].name)
         assertTrue(leaderboard[0].rating > leaderboard[1].rating)
+    }
+
+    @Test
+    fun `the live-match endpoint tracks a match from created to settled`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = createClient {
+            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+        }
+        suspend fun login(name: String): SessionResponse = client.post("/v1/auth/session") {
+            contentType(ContentType.Application.Json)
+            setBody(SessionRequest(name, "serverid-$name"))
+        }.body()
+
+        val anna = login("Anna")
+        val ben = login("Ben")
+        val bystander = login("Bystander")
+        suspend fun liveFor(session: SessionResponse) = client.get("/v1/players/me/match") {
+            header("Authorization", "Bearer ${session.token}")
+        }
+
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v1/players/me/match").status)
+        assertEquals(HttpStatusCode.NoContent, liveFor(anna).status, "no match, no content")
+
+        val match = matchService.createMatch(
+            QueueMatch(
+                QueueEntry(UUID.fromString(anna.profile.uuid), 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
+                QueueEntry(UUID.fromString(ben.profile.uuid), 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
+            ),
+            MatchFormat.LOCKOUT_1V1,
+        )
+
+        // Both sides see it; nobody else does.
+        for (session in listOf(anna, ben)) {
+            val response = liveFor(session)
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertEquals(match.id.toString(), response.body<QueueServerMessage.MatchFound>().matchId)
+        }
+        assertEquals(HttpStatusCode.NoContent, liveFor(bystander).status)
+
+        // Ben concedes without ever having connected to the match server — the
+        // exact shape that leaves Anna's client believing the match is still on.
+        matchService.forfeit(match.id, UUID.fromString(ben.profile.uuid))
+
+        assertEquals(
+            HttpStatusCode.NoContent,
+            liveFor(anna).status,
+            "the winner's client is never told the match is over",
+        )
+        assertEquals(HttpStatusCode.NoContent, liveFor(ben).status)
+    }
+
+    @Test
+    fun `a player can forfeit their own match with only their session token`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = createClient {
+            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+        }
+        suspend fun login(name: String): SessionResponse = client.post("/v1/auth/session") {
+            contentType(ContentType.Application.Json)
+            setBody(SessionRequest(name, "serverid-$name"))
+        }.body()
+
+        val anna = login("Anna")
+        val ben = login("Ben")
+        val stranger = login("Stranger")
+        val match = matchService.createMatch(
+            QueueMatch(
+                QueueEntry(UUID.fromString(anna.profile.uuid), 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
+                QueueEntry(UUID.fromString(ben.profile.uuid), 1000, MatchFormat.LOCKOUT_1V1, Instant.now()),
+            ),
+            MatchFormat.LOCKOUT_1V1,
+        )
+
+        // No token at all: this is the endpoint that ends ranked matches.
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client.post("/v1/matches/${match.id}/forfeit").status,
+        )
+
+        // Someone else's match is indistinguishable from one that does not exist.
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.post("/v1/matches/${match.id}/forfeit") {
+                header("Authorization", "Bearer ${stranger.token}")
+            }.status,
+        )
+
+        // The whole point: no per-match server token, and the match settles.
+        assertEquals(
+            HttpStatusCode.OK,
+            client.post("/v1/matches/${match.id}/forfeit") {
+                header("Authorization", "Bearer ${anna.token}")
+            }.status,
+        )
+        assertEquals(MatchOutcome.TEAM_B_WIN, matches.get(match.id)?.outcome)
+
+        // Pressing it twice, or racing the agent's own report, is not an error
+        // the player should ever have to think about.
+        assertEquals(
+            HttpStatusCode.Conflict,
+            client.post("/v1/matches/${match.id}/forfeit") {
+                header("Authorization", "Bearer ${anna.token}")
+            }.status,
+        )
     }
 }

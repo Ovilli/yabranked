@@ -13,7 +13,10 @@ private val log = LoggerFactory.getLogger("yabranked-client")
  */
 open class UiIcons : UiPrimitives() {
 
-    // Icon atlas indices (icons.png: nine 16×16 white glyphs, tinted at blit).
+    // Icon atlas indices (icons.png: a row of 16×16 white masks, tinted at
+    // blit). tools/gen_icons.py appends new glyphs to the atlas — run it and
+    // bump ICON_COUNT to the width it prints. Indices are baked in here, so
+    // glyphs are only ever appended, never reordered.
     val ICON_PLAY = 0
     val ICON_LEADERBOARD = 1
     val ICON_HISTORY = 2
@@ -26,8 +29,13 @@ open class UiIcons : UiPrimitives() {
     val ICON_SEARCH = 9
     val ICON_VS = 10
     val ICON_GLOBE = 11
+    val ICON_FRIENDS = 12
+    val ICON_PARTY = 13
+    val ICON_REFRESH = 14
+    val ICON_CLOSE = 15
+    val ICON_BOARD = 16
 
-    private val ICON_COUNT = 12
+    private val ICON_COUNT = 17
 
     /** Texture ids already reported by [textureFailed]. Render-thread only, so a
      *  plain set needs no synchronisation. */

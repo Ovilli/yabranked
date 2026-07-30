@@ -11,10 +11,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+
+/**
+ * The agent's own default postgame linger (`AgentConfig.postgameSeconds`),
+ * mirrored here so the teardown grace covers it when nothing overrides it.
+ */
+private const val DEFAULT_POSTGAME_SECONDS = 20L
 
 data class OrchestratorConfig(
     /** Docker image for the match server (see docker/ in this repo). */
@@ -43,12 +50,44 @@ data class OrchestratorConfig(
     /** Optional override for how long the server lingers after a match (seconds). */
     val postgameSeconds: Long? = null,
     /**
+     * How long a *decided* match's container is left alive after it settles.
+     *
+     * `docker rm -f` the instant the result lands is a SIGKILL on a container
+     * that is still working. Two things were lost to it, both of them things
+     * the agent is documented to do:
+     *
+     * - **The replay.** A settle the agent did not initiate — the player-facing
+     *   `POST /v1/matches/{id}/forfeit`, which the forfeit screen fires
+     *   alongside the in-game `/forfeit` and usually wins the race to the
+     *   backend — killed the container before it ever uploaded, so every
+     *   "Save replay" on such a match answered "no replay was recorded".
+     * - **The postgame linger.** The agent keeps the server up for
+     *   [postgameSeconds] so players can read YAB's game-over screen; the
+     *   container was destroyed under them long before that elapsed.
+     *
+     * Voided matches are still torn down immediately: nobody is reading a
+     * game-over screen for a match that never happened, and a never-ready
+     * container holding its port for three minutes is the bug the reaper
+     * exists to prevent.
+     */
+    val settleGrace: Duration = ((postgameSeconds ?: DEFAULT_POSTGAME_SECONDS) + 15).seconds,
+    /**
      * How long a match may stay PENDING before it is voided and reaped. Kept
      * just past the client's own wait (`MatchService.PROVISION_TIMEOUT_SECONDS`)
      * so a client that gives up doesn't leave the container running.
      */
     val readyTimeout: Duration =
         (MatchService.PROVISION_TIMEOUT_SECONDS + MatchService.PROVISION_REAP_GRACE_SECONDS).seconds,
+    /**
+     * How often to check that each live match's container is still running.
+     *
+     * A match server can die *after* it went ACTIVE — a crash, an OOM kill, the
+     * vanilla watchdog deciding a long worldgen tick is a hang. Nothing else
+     * notices: the ready-timeout reaper only ever looks at PENDING matches, so
+     * the row stayed ACTIVE forever, its port was never released, and both
+     * players were left holding a match they could neither finish nor leave.
+     */
+    val livenessInterval: Duration = 30.seconds,
 )
 
 /**
@@ -75,7 +114,48 @@ class MatchOrchestrator(
             scope.launch(Dispatchers.IO) { provision(scope, match) }
         }
         matchService.onMatchSettled { match ->
-            scope.launch(Dispatchers.IO) { teardown(match.id.toString()) }
+            scope.launch(Dispatchers.IO) {
+                // A decided match keeps its container for the grace period: the
+                // agent may still be uploading the recording (a forfeit settled
+                // over the player's own token gets here first) and the players
+                // are still on the game-over screen. See [settleGrace].
+                if (match.outcome != dev.yabranked.proto.MatchOutcome.VOID) delay(config.settleGrace)
+                teardown(match.id.toString())
+            }
+        }
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(config.livenessInterval)
+                runCatching { sweepDeadContainers() }
+                    .onFailure { log.error("liveness sweep failed", it) }
+            }
+        }
+    }
+
+    /**
+     * Void every match whose container is gone.
+     *
+     * The agent reports the result as the game ends, so a container that dies
+     * first takes the result with it. Voiding is the honest outcome: nobody
+     * finished, and neither player's rating should move for a match the
+     * infrastructure lost. Doing nothing — which is what used to happen — left
+     * the row ACTIVE forever, and with it a port that was never released and two
+     * players the queue would not take back.
+     */
+    private fun sweepDeadContainers() {
+        // Snapshot: voiding fires the settle listeners, which mutate `containers`.
+        for ((matchId, name) in containers.entries.map { it.key to it.value }) {
+            if (runtime.isRunning(name)) continue
+            val id = runCatching { UUID.fromString(matchId) }.getOrNull() ?: continue
+            val current = matches.get(id) ?: continue
+            if (current.status != MatchStatus.PENDING && current.status != MatchStatus.ACTIVE) continue
+            log.warn("container {} for match {} is gone; voiding the match", name, matchId)
+            metrics.serverDied()
+            matchService.voidMatch(id)
+            // voidMatch settles, and the settle listener tears the container
+            // down — but only if it is still registered, so make sure the port
+            // comes back either way.
+            teardown(matchId)
         }
     }
 
@@ -122,6 +202,22 @@ class MatchOrchestrator(
         return null
     }
 
+    /** The side-ordered roster as the agent's `YABRANKED_TEAMS` expects it. */
+    private fun rosterJson(
+        match: MatchRecord,
+        roster: Map<java.util.UUID, dev.yabranked.backend.store.PlayerRecord>,
+    ): String = kotlinx.serialization.json.Json.encodeToString(
+        kotlinx.serialization.builtins.ListSerializer(
+            kotlinx.serialization.builtins.ListSerializer(RosterEntry.serializer())
+        ),
+        match.rosters.map { side ->
+            side.map { uuid -> RosterEntry(uuid.toString(), roster[uuid]?.name ?: "?") }
+        },
+    )
+
+    @kotlinx.serialization.Serializable
+    private data class RosterEntry(val uuid: String, val name: String)
+
     private fun releasePort(matchId: String) {
         matchPorts.remove(matchId)?.let(portsInUse::remove)
     }
@@ -138,7 +234,10 @@ class MatchOrchestrator(
         }
         val playerA = players.getPlayer(match.playerA)
         val playerB = players.getPlayer(match.playerB)
-        if (playerA == null || playerB == null) {
+        // Every participant, not just the two captains: a 3v3 whose other four
+        // accounts have vanished must not be provisioned either.
+        val roster = players.getPlayers(match.participants)
+        if (playerA == null || playerB == null || roster.size != match.participants.size) {
             // used to throw straight out of the launched coroutine, leaving the
             // match PENDING forever with nothing scheduled to reap it
             log.error("match {} references an unknown player; voiding", match.id)
@@ -167,6 +266,12 @@ class MatchOrchestrator(
             "YABRANKED_PLAYER_A_NAME" to playerA.name,
             "YABRANKED_PLAYER_B_UUID" to playerB.uuid.toString(),
             "YABRANKED_PLAYER_B_NAME" to playerB.name,
+            // The full side-ordered roster, which is what gates joins and picks
+            // YAB teams once a side can hold more than one player. The two
+            // PLAYER_A/B variables stay for agents that predate it.
+            "YABRANKED_TEAMS" to rosterJson(match, roster),
+            "YABRANKED_SHARED_WORLD" to match.settings.sharedWorld.toString(),
+            "YABRANKED_SHARED_SEED" to match.settings.sharedSeed.toString(),
         )
 
         try {

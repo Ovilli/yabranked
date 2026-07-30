@@ -2,13 +2,14 @@ package dev.yabranked.client
 
 import dev.yabranked.proto.*
 
+import dev.yabranked.client.ui.PartyBox
 import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
-import org.lwjgl.glfw.GLFW
 
 class RankedScreen(
     private val parent: Screen?,
@@ -39,11 +40,19 @@ class RankedScreen(
         h = h * 31 + (if (RankedState.isQueued) 1 else 0)
         h = h * 31 + (if (RankedState.activeMatch != null) 1 else 0)
         h = h * 31 + RankedState.selectedFormat.name.hashCode()
+        // The party box and the queue button both change shape with the party,
+        // and an invite arriving needs the prompt drawn under the card.
+        h = h * 31 + (RankedState.party?.members?.size ?: -1)
+        h = h * 31 + (if (RankedState.isPartyLeader) 1 else 0)
+        h = h * 31 + (RankedState.partyInvite?.partyId?.hashCode() ?: 0)
         return h
     }
 
     override fun init() {
         RankedState.onRankedScreen = true
+        // Invites and friend requests are server pushes, so the socket has
+        // to be open before one arrives — not opened in reaction to one.
+        if (RankedState.isAuthenticated) RankedParty.connect()
         lastSignature = stateSignature()
         val centerX = width / 2
         val cardBottom = CARD_TOP + CARD_HEIGHT
@@ -75,7 +84,9 @@ class RankedScreen(
         } else {
             // the format is locked in once queued, so the picker is disabled
             // rather than removed to keep the button layout from jumping
-            pickerButton = RankedButton(centerX - 100, by, 200, 20, formatLabel()) { cycleFormat() }
+            pickerButton = RankedButton(centerX - 100, by, 200, 20, formatLabel()) {
+                minecraft.setScreenAndShow(ModeSelectScreen(this))
+            }
             pickerButton!!.active = !RankedState.isQueued
             addRenderableWidget(pickerButton!!)
             by += ROW
@@ -98,6 +109,48 @@ class RankedScreen(
                 }
             )
             by += ROW
+
+            // Its own way in, not only through a match in History. A downloaded
+            // recording is a local file that outlives the backend's memory of the
+            // match, so there has to be a door that does not go through the
+            // backend at all.
+            addRenderableWidget(
+                RankedButton(centerX - 100, by, 200, 20, Component.literal("Replays"), Ui.ICON_PLAY) {
+                    minecraft.setScreenAndShow(dev.yabranked.client.replay.ReplayLibraryScreen(this))
+                }
+            )
+            by += ROW
+
+            addRenderableWidget(
+                RankedButton(centerX - 100, by, 98, 20, Component.literal(friendsLabel()), Ui.ICON_FRIENDS) {
+                    minecraft.setScreenAndShow(FriendsScreen(this))
+                }
+            )
+            addRenderableWidget(
+                RankedButton(centerX + 2, by, 98, 20, Component.literal(partyLabel()), Ui.ICON_PARTY) {
+                    minecraft.setScreenAndShow(PartyScreen(this))
+                }
+            )
+            by += ROW
+
+            // An invite is answered here rather than only on the party screen:
+            // it arrives while the player is looking at this one, and burying
+            // the accept a screen deep is how invites time out.
+            RankedState.partyInvite?.let { invite ->
+                addRenderableWidget(
+                    RankedButton(centerX - 100, by, 98, 20, Component.literal("Join ${invite.from.name}")) {
+                        RankedParty.accept(invite.partyId)
+                    }
+                )
+                addRenderableWidget(
+                    RankedButton(centerX + 2, by, 98, 20, Component.literal("Decline")) {
+                        RankedParty.decline(invite.partyId)
+                        RankedState.partyInvite = null
+                        refresh()
+                    }
+                )
+                by += ROW
+            }
         }
 
         addRenderableWidget(
@@ -140,16 +193,18 @@ class RankedScreen(
     )
 
     private fun formatLabel(): Component = Component.literal(
-        "Format: ${RankedState.selectedFormat.displayName}" +
+        "Mode: ${RankedState.selectedFormat.displayName}" +
             if (RankedState.selectedFormat.ranked) " (rated)" else " (casual)"
     )
 
-    /** Steps through the available formats; wraps back to the first. */
-    private fun cycleFormat() {
-        val formats = MatchFormat.entries
-        val next = (formats.indexOf(RankedState.selectedFormat) + 1) % formats.size
-        RankedState.selectedFormat = formats[next]
-        refresh()
+    private fun friendsLabel(): String {
+        val pending = RankedState.friendRequests
+        return if (pending > 0) "Friends ($pending)" else "Friends"
+    }
+
+    private fun partyLabel(): String {
+        val party = RankedState.party ?: return "Party"
+        return "Party ${party.members.size}/${party.maxSize}"
     }
 
     private fun login() {
@@ -175,12 +230,20 @@ class RankedScreen(
                         RankedState.hideOwnFlag = result.session.profile.hideFlag
                         RankedState.hideElo = result.session.profile.hideRating
                         RankedState.statusMessage = null
+                        // The party socket is also the channel invites and
+                        // friend requests arrive on, so it opens as soon as
+                        // there is a session — not when a party is created.
+                        RankedParty.connect()
                         // Populate the win streak shown on the profile card.
                         val uuid = result.session.profile.uuid
                         YabRankedClient.workers.execute {
                             val hist = backend.fetchHistory(uuid, limit = 20).orElse(emptyList())
+                            val friends = backend.fetchFriends()
                             minecraft.execute {
-                                RankedState.winStreak = RankedState.currentWinStreak(hist)
+                                RankedState.winStreak = result.session.profile.currentStreak
+                                    ?: RankedState.currentWinStreak(hist)
+                                RankedState.friendRequests =
+                                    friends.orElse(FriendListResponse()).incoming.size
                                 refresh()
                             }
                         }
@@ -196,7 +259,23 @@ class RankedScreen(
     }
 
     private fun toggleQueue() {
-        if (RankedState.isQueued) RankedQueue.leave() else RankedQueue.join()
+        val party = RankedState.party
+        when {
+            RankedState.isQueued -> RankedQueue.leave()
+            // A party-only format has no queue to join — the party is both
+            // sides — so the same button asks the backend to create the match
+            // outright. Doing it here as well as on the party screen keeps the
+            // main button honest whatever mode is selected.
+            RankedState.selectedFormat.partyOnly -> when {
+                party == null -> RankedState.statusMessage = "§eCreate a party first"
+                !RankedState.isPartyLeader ->
+                    RankedState.statusMessage = "§eOnly the party leader starts the match"
+                party.startBlockedReason != null ->
+                    RankedState.statusMessage = "§e${party.startBlockedReason}"
+                else -> RankedParty.startMatch()
+            }
+            else -> RankedQueue.join(asParty = RankedState.queueAsParty)
+        }
         // rebuild so the queue label and the picker's enabled state track the
         // new queue status (the socket itself connects asynchronously)
         refresh()
@@ -224,15 +303,57 @@ class RankedScreen(
             drawProfileCard(g, centerX, profile)
         }
 
+        drawPartyBox(g, mouseX, mouseY)
+
         drawStatusLine(g, centerX)
 
         drawDisabledHints(g, mouseX, mouseY)
 
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
+        // The notice stack is drawn once, for every screen, by
+        // YabRankedClient — not here, or a screen stacked on another would
+        // paint a second copy of it.
         Ui.fadeIn(g, width, height, openedAt)
     }
 
     // Keyboard shortcuts are implemented via Fabric KeyMappings in YabRankedClient.
+
+    /** Top-left party strip: heads of everyone in it, plus the invite slot. */
+    private fun drawPartyBox(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int) {
+        if (!RankedState.isAuthenticated) return
+        val party = RankedState.party
+        // With no party there is only the "+" — still worth drawing, since it is
+        // the discoverable way in.
+        val hovered = PartyBox.slotAt(party, PARTY_BOX_X, PARTY_BOX_Y, mouseX, mouseY)
+        PartyBox.draw(g, font, PARTY_BOX_X, PARTY_BOX_Y, party, hovered)
+        if (hovered != null) {
+            val hint = when {
+                hovered == PartyBox.INVITE_SLOT -> "Invite a friend"
+                else -> party?.members?.getOrNull(hovered)?.player?.name ?: ""
+            }
+            if (hint.isNotEmpty()) drawTooltip(g, mouseX, mouseY, hint)
+        }
+    }
+
+    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (RankedState.isAuthenticated) {
+            val party = RankedState.party
+            val slot = PartyBox.slotAt(party, PARTY_BOX_X, PARTY_BOX_Y, event.x().toInt(), event.y().toInt())
+            if (slot != null) {
+                // The "+" goes to the friends list (the only place a valid invite
+                // target can come from); a member's head goes to the party screen.
+                if (slot == PartyBox.INVITE_SLOT) {
+                    if (party == null) RankedParty.create()
+                    minecraft.setScreenAndShow(FriendsScreen(this))
+                } else {
+                    minecraft.setScreenAndShow(PartyScreen(this))
+                }
+                Sfx.select()
+                return true
+            }
+        }
+        return super.mouseClicked(event, doubled)
+    }
 
     private fun drawSignedOutCard(g: GuiGraphicsExtractor, centerX: Int) {
         val left = centerX - CARD_WIDTH / 2
@@ -278,7 +399,9 @@ class RankedScreen(
         // Header column: name / tier / rating on a 12px grid, one colour each.
         // No mid-string colour switches — the crest and accent bar already carry
         // the tier hue, so the text stays greyscale.
-        g.text(font, profile.name, nameX, CARD_TOP + 8, Ui.WHITE)
+        // Stops at the crest slot: a 16-character name in wide glyphs otherwise
+        // runs under it, and the flag has already eaten 12px of the run-up.
+        g.text(font, Ui.fit(font, profile.name, padRight - 34 - nameX), nameX, CARD_TOP + 8, Ui.WHITE)
         g.text(font, profile.tier, textLeft, CARD_TOP + 20, tierColor)
 
         val ratingLine = if (RankedState.hideElo) "MMR hidden"
@@ -359,7 +482,9 @@ class RankedScreen(
         }
 
         (RankedState.queueStatus ?: RankedState.statusMessage)?.let { status ->
-            g.centeredText(font, status, centerX, y, Ui.WHITE)
+            // Often the server's own refusal text (a party's startBlockedReason,
+            // a queue error), so its length is not ours to assume.
+            g.centeredText(font, Ui.fit(font, status, width - 20), centerX, y, Ui.WHITE)
         }
     }
 
@@ -427,5 +552,10 @@ class RankedScreen(
         const val STATUS_GAP = 6
         /** Height reserved for the (up to two-line) status strip under the card. */
         const val STATUS_STRIP = 26
+
+        /** Top-left corner of the party strip. Clear of the centred card at
+         *  every GUI scale, and where a player already looks for a party list. */
+        const val PARTY_BOX_X = 6
+        const val PARTY_BOX_Y = 6
     }
 }

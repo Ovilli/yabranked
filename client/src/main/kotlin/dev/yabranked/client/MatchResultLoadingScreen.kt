@@ -22,9 +22,11 @@ class MatchResultLoadingScreen(
 
     override fun init() {
         RankedState.onResultLoading = true
-        // Escape hatch in case the result never arrives (server hiccup).
+        RankedState.resultLoadingVisible = true
+        // Escape hatch in case the result never arrives (server hiccup). Sits on
+        // the same bottom bar as every other ranked screen's Back/Done/Cancel.
         addRenderableWidget(
-            RankedButton(width / 2 - 100, height - 40, 200, 20, Component.literal("Skip")) { onClose() }
+            RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Skip"), Ui.ICON_BACK) { onClose() }
         )
     }
 
@@ -49,8 +51,23 @@ class MatchResultLoadingScreen(
 
     override fun shouldCloseOnEsc(): Boolean = false
 
+    /**
+     * Anything replacing this screen clears the flag, which is what lets the
+     * client tick notice it has been shoved aside and put it back.
+     *
+     * Vanilla's disconnect screen is set from the network thread's teardown, so
+     * "how many ticks after the disconnect event" is not a number that can be
+     * guessed — it used to be a fixed five, and on a slow teardown the player
+     * was simply left staring at "Disconnected" instead of their result.
+     */
+    override fun removed() {
+        RankedState.resultLoadingVisible = false
+        super.removed()
+    }
+
     override fun onClose() {
         RankedState.onResultLoading = false
+        RankedState.resultLoadingVisible = false
         minecraft.setScreenAndShow(TitleScreen())
     }
 }

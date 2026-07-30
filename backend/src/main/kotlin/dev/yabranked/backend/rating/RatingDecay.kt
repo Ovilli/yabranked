@@ -1,7 +1,10 @@
 package dev.yabranked.backend.rating
 
+import dev.yabranked.backend.match.MatchService
 import dev.yabranked.backend.season.SeasonService
+import dev.yabranked.backend.store.LockingTransactionRunner
 import dev.yabranked.backend.store.PlayerStore
+import dev.yabranked.backend.store.TransactionRunner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -87,6 +90,13 @@ class DecaySweep(
     /** Ceiling on rows examined per sweep; decay never reaches further down. */
     private val scanLimit: Int = DEFAULT_SCAN_LIMIT,
     private val interval: kotlin.time.Duration = 6.hours,
+    /**
+     * The store's transaction boundary — the same one the settle path uses, so
+     * a charge and a settle for the same row serialize instead of racing. Pass
+     * [MatchService.transactionRunner]; the default is only useful in tests,
+     * where nothing else is writing.
+     */
+    private val transactions: TransactionRunner = LockingTransactionRunner(),
 ) {
     private val log = LoggerFactory.getLogger("decay")
     private var job: Job? = null
@@ -99,12 +109,22 @@ class DecaySweep(
         // protect, so they are not worth decaying.
         val ladder = players.topByRating(season, limit = scanLimit, minMatches = rating.placementMatches)
         var changed = 0
-        for (stats in ladder) {
+        for (scanned in ladder) {
             // sorted by rating: once we drop to the protected band, so has the rest
-            if (stats.rating <= decay.policy.protectedRating) break
-            val charge = decay.charge(stats.rating, stats.lastPlayedAt, stats.decayedThrough, now) ?: continue
-            players.upsertStats(stats.copy(rating = charge.rating, decayedThrough = charge.chargedThrough))
-            changed++
+            if (scanned.rating <= decay.policy.protectedRating) break
+            // The scan is a plain, unlocked read of the whole ladder, and
+            // upsertStats replaces every column. Charging the copy it handed
+            // back wrote the row as it was *before* any match that settled in
+            // between — the rating change, the win and the playtime all
+            // silently reverted. Re-read the row under its lock and charge that.
+            val moved = transactions.transaction {
+                val stats = players.getStatsForUpdate(scanned.uuid, season) ?: return@transaction false
+                val charge = decay.charge(stats.rating, stats.lastPlayedAt, stats.decayedThrough, now)
+                    ?: return@transaction false
+                players.upsertStats(stats.copy(rating = charge.rating, decayedThrough = charge.chargedThrough))
+                true
+            }
+            if (moved) changed++
         }
         if (changed > 0) log.info("decayed {} inactive rating(s) in season {}", changed, season)
         return changed

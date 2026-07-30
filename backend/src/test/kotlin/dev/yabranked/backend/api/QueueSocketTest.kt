@@ -26,6 +26,7 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
+import kotlinx.coroutines.cancel
 import io.ktor.websocket.readText
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -128,6 +129,34 @@ class QueueSocketTest {
     }
 
     @Test
+    fun `a frame we cannot decode does not deafen the socket to leave_queue`() = testApplication {
+        // The reader coroutine is the only thing that ever sees leave_queue.
+        // Falling out of it on an undecodable frame left the client queued with
+        // a Cancel button that did nothing, while the push loop kept the socket
+        // open and the timer ticking — the client had no way to tell.
+        application { rankedApi(deps()) }
+        val session = login("Garbler")
+        val uuid = UUID.fromString(session.profile.uuid)
+
+        val socket = wsClient().webSocketSession("/v1/queue?token=${session.token}")
+        socket.send(Frame.Text(encode(QueueClientMessage.JoinQueue(MatchFormat.LOCKOUT_1V1))))
+        assertTrue(socket.nextMessage() is QueueServerMessage.QueueState)
+        assertNotNull(queueService.snapshot(uuid))
+
+        // anything this build's QueueClientMessage cannot decode: a newer
+        // client's message type, or simply a bad frame
+        socket.send(Frame.Text("""{"type":"from_a_newer_client"}"""))
+        socket.send(Frame.Text(encode(QueueClientMessage.LeaveQueue)))
+
+        val deadline = System.currentTimeMillis() + 5_000
+        while (System.currentTimeMillis() < deadline && queueService.snapshot(uuid) != null) {
+            kotlinx.coroutines.delay(50)
+        }
+        assertNull(queueService.snapshot(uuid), "leave_queue after a bad frame was never read")
+        socket.close()
+    }
+
+    @Test
     fun `a paired player keeps hearing from us while the server boots`() = testApplication {
         // Pairing dequeues the player, so the state pushes used to stop dead and
         // the client rendered "searching" with a frozen timer for the whole
@@ -165,6 +194,64 @@ class QueueSocketTest {
         assertNotNull(preparing, "the client was told nothing while the match server was provisioning")
         other.close()
         socket.close()
+    }
+
+    @Test
+    fun `a lone player keeps their socket and their queue entry across ticks`() = testApplication {
+        application { rankedApi(deps()) }
+        val session = login("Patient")
+        val client = wsClient()
+
+        val socket = client.webSocketSession("/v1/queue?token=${session.token}")
+        socket.send(Frame.Text(encode(QueueClientMessage.JoinQueue(MatchFormat.LOCKOUT_1V1))))
+
+        // Nobody to match with, so the socket's whole job is to keep saying so.
+        // Three consecutive ticks is enough to catch a handler that hangs up
+        // after the first one.
+        repeat(3) { tick ->
+            val message = socket.nextMessage()
+            assertTrue(
+                message is QueueServerMessage.QueueState,
+                "tick $tick: expected queue state, got $message",
+            )
+        }
+        assertTrue(queueService.snapshot(UUID.fromString(session.profile.uuid)) != null)
+        socket.close()
+    }
+
+    @Test
+    fun `a dropped socket releases the queue entry so the player can reconnect`() = testApplication {
+        application { rankedApi(deps()) }
+        val session = login("Flaky")
+        val uuid = UUID.fromString(session.profile.uuid)
+        val client = wsClient()
+
+        // Drop the socket the way a real client does — abruptly, mid-queue.
+        val first = client.webSocketSession("/v1/queue?token=${session.token}")
+        first.send(Frame.Text(encode(QueueClientMessage.JoinQueue(MatchFormat.LOCKOUT_1V1))))
+        assertTrue(first.nextMessage() is QueueServerMessage.QueueState)
+        first.cancel()
+
+        // Cleanup runs in the handler's `finally`, which is reached while the
+        // coroutine is already cancelled, so every suspend call in it has to be
+        // NonCancellable to run at all.
+        var released = false
+        repeat(50) {
+            if (queueService.snapshot(uuid) == null) {
+                released = true
+                return@repeat
+            }
+            kotlinx.coroutines.delay(100)
+        }
+        assertTrue(released, "a dropped socket must not leave the player queued")
+
+        // …and the reconnect that follows is accepted rather than refused as a
+        // duplicate session, which is what turned this into a reconnect loop.
+        val second = client.webSocketSession("/v1/queue?token=${session.token}")
+        second.send(Frame.Text(encode(QueueClientMessage.JoinQueue(MatchFormat.LOCKOUT_1V1))))
+        val message = second.nextMessage()
+        assertTrue(message is QueueServerMessage.QueueState, "reconnect was refused: $message")
+        second.close()
     }
 
     @Test

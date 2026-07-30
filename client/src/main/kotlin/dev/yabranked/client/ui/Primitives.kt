@@ -192,6 +192,19 @@ open class UiPrimitives : UiPalette() {
         g.fill(x, thumbY, x + 2, thumbY + thumbH, THUMB)
     }
 
+    /**
+     * [scrollbar] laid on its side: a range indicator under a chart that is
+     * showing a window of a longer series. Same no-op rule when it all fits.
+     */
+    fun scrollbarHorizontal(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, total: Int, visible: Int, offset: Int) {
+        if (total <= visible) return
+        g.fill(x, y, x + width, y + 2, TRACK)
+        val maxOffset = total - visible
+        val thumbW = maxOf(10, width * visible / total)
+        val thumbX = x + (width - thumbW) * offset.coerceIn(0, maxOffset) / maxOffset
+        g.fill(thumbX, y, thumbX + thumbW, y + 2, THUMB)
+    }
+
     /** Trim [text] with an ellipsis so it fits within [maxWidth] pixels. Returns
      *  the original when it already fits. Used to stop list cells overlapping. */
     fun fit(font: Font, text: String, maxWidth: Int): String {

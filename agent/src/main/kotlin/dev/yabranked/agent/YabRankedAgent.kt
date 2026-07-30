@@ -5,6 +5,7 @@ import me.jfenn.bingo.api.BingoEvents
 import me.jfenn.bingo.api.event.GameEndedEvent
 import net.fabricmc.api.DedicatedServerModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
+import net.fabricmc.fabric.api.networking.v1.ServerConfigurationConnectionEvents
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents
 import net.minecraft.network.chat.Component
 import net.minecraft.server.MinecraftServer
@@ -30,21 +31,39 @@ class YabRankedAgent : DedicatedServerModInitializer {
         /** ~30s of 1s retries for a joining player to become resolvable. */
         const val MAX_ASSIGN_ATTEMPTS = 30
         const val MAX_START_ATTEMPTS = 10
+
+        /**
+         * Ceiling on the gap between a settled match and the disconnect, whatever
+         * `YABRANKED_POSTGAME_SECONDS` says.
+         *
+         * It is a ceiling rather than a setting because the window is a hazard,
+         * not a feature: for as long as players are on the match server, YAB's
+         * postgame "return to lobby" is one click away, and clicking it resets the
+         * worlds into a fresh lobby game. See [endSessionAndShutdown].
+         */
+        const val MAX_WIND_DOWN_SECONDS = 3L
     }
 
     private lateinit var config: AgentConfig
     private lateinit var reporter: BackendReporter
+    private lateinit var replay: ReplayRecorder
     private var server: MinecraftServer? = null
 
     private val phase = AtomicReference(Phase.CONFIGURING)
     private var noShowTimer: ScheduledFuture<*>? = null
-    private var abandonTimer: ScheduledFuture<*>? = null
 
     /** Set when the agent decides the outcome itself (abandon/no-show). */
     private val forcedOutcome = AtomicReference<WireOutcome?>(null)
 
     /** UUID of the player who forfeited (concede or no-show); null for a clean finish. */
     private val forfeiter = AtomicReference<UUID?>(null)
+
+    /**
+     * Which side won, for matches with more than two of them. The outcome enum
+     * can only name team A or team B, so a three-way free-for-all is
+     * unattributable without this.
+     */
+    private val winningSide = AtomicReference<Int?>(null)
 
     private val assignedPlayers = java.util.concurrent.ConcurrentHashMap.newKeySet<UUID>()
     private val startRequested = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -57,8 +76,24 @@ class YabRankedAgent : DedicatedServerModInitializer {
         }
         config = parsed
         reporter = BackendReporter(config, log)
+        replay = ReplayRecorder(
+            config, scheduler, log,
+            uploader = ReplayUploader(
+                log,
+                append = reporter::appendReplayStream,
+                putMeta = reporter::reportReplayMeta,
+            ),
+            checkpointSeconds = config.replayCheckpointSeconds,
+        )
 
         ServerLifecycleEvents.SERVER_STARTED.register { server -> onServerStarted(server) }
+
+        // The packet capture starts here, at the configuration handshake, and not
+        // at the match: a stream that does not contain the registry sync is not a
+        // shorter replay, it is an undecodable one.
+        ServerConfigurationConnectionEvents.BEFORE_CONFIGURE.register { handler, _ ->
+            replay.attach(handler)
+        }
 
         ServerPlayConnectionEvents.JOIN.register { handler, _, server ->
             onPlayerJoin(server, handler.player.uuid, handler.player.gameProfile.name)
@@ -69,9 +104,19 @@ class YabRankedAgent : DedicatedServerModInitializer {
         }
 
         BingoEvents.GAME_STARTED.register { _ ->
+            // A reported match is over for good. YAB resets to its lobby when
+            // its postgame timer ends and will happily start a *second* game
+            // there — which must not re-arm the recorder, restart the clock or
+            // put the agent back into PLAYING, where a disconnect would report
+            // a forfeit for a match that was settled minutes ago.
+            if (phase.get() == Phase.REPORTED) {
+                log.info("[yabranked] ignoring a game started after the match was reported")
+                return@register
+            }
             log.info("[yabranked] game started")
             phase.set(Phase.PLAYING)
             noShowTimer?.cancel(false)
+            this.server?.let(replay::start)
         }
 
         BingoEvents.GAME_ENDED.register { event -> onGameEnded(event) }
@@ -178,9 +223,28 @@ class YabRankedAgent : DedicatedServerModInitializer {
                 return@execute
             }
 
+            // Tell whoever did turn up what they are waiting for. Sitting alone in
+            // a bingo lobby with no message is indistinguishable from a broken
+            // match server, which is what it was reported as.
+            for (at in listOf(15L, 45L)) {
+                if (config.noShowTimeoutSeconds > at) {
+                    scheduler.schedule({
+                        if (phase.get() == Phase.WAITING_FOR_PLAYERS) {
+                            val left = config.noShowTimeoutSeconds - at
+                            announce(
+                                server,
+                                "§eWaiting for your opponent to connect… §7the match is voided in §e${left}s§7 " +
+                                    "if they do not.",
+                            )
+                        }
+                    }, at, TimeUnit.SECONDS)
+                }
+            }
+
             noShowTimer = scheduler.schedule({
                 if (phase.get() == Phase.WAITING_FOR_PLAYERS) {
                     log.warn("[yabranked] players did not arrive within ${config.noShowTimeoutSeconds}s; voiding match")
+                    announce(server, "§cYour opponent never connected. §7This match is void — no rating changes.")
                     forcedOutcome.set(WireOutcome.VOID)
                     reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
                 }
@@ -188,10 +252,22 @@ class YabRankedAgent : DedicatedServerModInitializer {
         }
     }
 
-    private fun expectedPlayer(uuid: UUID): AgentConfig.ExpectedPlayer? = when (uuid) {
-        config.playerA.uuid -> config.playerA
-        config.playerB.uuid -> config.playerB
-        else -> null
+    private fun expectedPlayer(uuid: UUID): AgentConfig.ExpectedPlayer? = config.playerOf(uuid)
+
+    /** The side index this player fights for; 0 when somehow unknown. */
+    private fun sideOf(uuid: UUID): Int = config.sideOf(uuid) ?: 0
+
+    /**
+     * The outcome that follows from [side] losing.
+     *
+     * Two-side matches carry the winner in the outcome enum; anything wider
+     * cannot, so [winningSide] is what the backend reads there. Both are set
+     * together so the record and the ladder always agree.
+     */
+    private fun defeatOf(side: Int): WireOutcome = when {
+        config.teams.size > 2 -> WireOutcome.TEAM_A_WIN
+        side == 0 -> WireOutcome.TEAM_B_WIN
+        else -> WireOutcome.TEAM_A_WIN
     }
 
     private fun onPlayerJoin(server: MinecraftServer, uuid: UUID, name: String) {
@@ -205,14 +281,14 @@ class YabRankedAgent : DedicatedServerModInitializer {
             return
         }
 
-        // returning player cancels the abandon countdown
-        abandonTimer?.cancel(false)
+        // Recorded whatever the phase: a rejoin mid-match is exactly the kind of
+        // gap in a movement track that otherwise looks unexplained.
+        replay.mark(WireReplayEventType.JOIN, expected, detail = "${expected.name} joined")
 
         if (phase.get() != Phase.WAITING_FOR_PLAYERS) return
 
         log.info("[yabranked] ${expected.name} joined; assigning team")
-        val team = if (uuid == config.playerA.uuid) "red" else "blue"
-        assignTeam(server, expected, team, attempt = 1)
+        assignTeam(server, expected, config.teamNameOf(sideOf(uuid)), attempt = 1)
     }
 
     /**
@@ -245,10 +321,12 @@ class YabRankedAgent : DedicatedServerModInitializer {
     }
 
     private fun startWhenBothAssigned(server: MinecraftServer) {
-        if (config.playerA.uuid !in assignedPlayers || config.playerB.uuid !in assignedPlayers) return
+        // Every player of every side, not just the two captains — a 3v3 that
+        // started with four players on the field would be unrateable.
+        if (config.roster.any { it.uuid !in assignedPlayers }) return
         if (!startRequested.compareAndSet(false, true)) return
 
-        log.info("[yabranked] both players on teams; starting game")
+        log.info("[yabranked] all ${config.roster.size} players on teams; starting game")
         // let team assignment and spawn placement settle before starting
         scheduler.schedule({ startGame(server, attempt = 1) }, 3, TimeUnit.SECONDS)
     }
@@ -290,15 +368,20 @@ class YabRankedAgent : DedicatedServerModInitializer {
                             0
                         }
                         else -> {
-                            val opponent =
-                                if (expected.uuid == config.playerA.uuid) config.playerB else config.playerA
-                            log.warn("[yabranked] ${expected.name} forfeited; ${opponent.name} wins")
-                            forfeiter.set(expected.uuid)
-                            forcedOutcome.set(
-                                if (expected.uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN
-                                else WireOutcome.TEAM_A_WIN
+                            // One player conceding forfeits their whole side —
+                            // there is no way to keep playing a 2v2 as a 1v2.
+                            val side = sideOf(expected.uuid)
+                            val winners = config.opponentsOf(expected.uuid)
+                            val winnerNames = winners.joinToString(", ") { it.name }
+                            log.warn("[yabranked] ${expected.name} forfeited; $winnerNames win")
+                            replay.mark(
+                                WireReplayEventType.FORFEIT, expected,
+                                detail = "${expected.name} conceded",
                             )
-                            announce(server, "§c${expected.name} forfeited. §6${opponent.name} wins!")
+                            forfeiter.set(expected.uuid)
+                            forcedOutcome.set(defeatOf(side))
+                            winningSide.set(config.teams.indices.firstOrNull { it != side })
+                            announce(server, "§c${expected.name} forfeited. §6$winnerNames win!")
                             command(server, "bingo end")
                             1
                         }
@@ -313,57 +396,63 @@ class YabRankedAgent : DedicatedServerModInitializer {
         }
     }
 
+    /**
+     * Leaving mid-match *is* conceding, and it resolves the moment it happens.
+     *
+     * There is no reconnect window: a player who leaves a ranked match cannot
+     * rejoin it, so waiting only ever made the winner sit in a finished match
+     * watching a countdown for something that could not happen — while the
+     * loser, already back at the menu, could not see it at all.
+     */
     private fun onPlayerDisconnect(server: MinecraftServer, uuid: UUID) {
         val leaver = expectedPlayer(uuid) ?: return
         if (phase.get() != Phase.PLAYING) return
 
-        val opponent = if (uuid == config.playerA.uuid) config.playerB else config.playerA
-        val forfeitSeconds = config.forfeitSeconds
-        log.warn("[yabranked] ${leaver.name} disconnected mid-match; forfeit in ${forfeitSeconds}s unless they return")
+        log.warn("[yabranked] ${leaver.name} disconnected mid-match; forfeiting immediately")
+        replay.mark(WireReplayEventType.LEAVE, leaver, detail = "${leaver.name} left the match")
+        resolveAbandon(server, uuid, leaver.name)
+    }
 
-        // Tell the player still in the match what is happening — otherwise the
-        // wait looks like the server simply stopped responding.
-        announce(server, "§c${leaver.name} disconnected. §7You win by forfeit in §e${forfeitSeconds}s§7 if they don't return.")
-        for (remaining in listOf(60L, 15L)) {
-            if (forfeitSeconds > remaining) {
-                scheduler.schedule(
-                    {
-                        if (phase.get() == Phase.PLAYING && server.playerList.getPlayer(uuid) == null) {
-                            announce(server, "§7Forfeit in §e${remaining}s§7...")
-                        }
-                    },
-                    forfeitSeconds - remaining,
-                    TimeUnit.SECONDS,
-                )
-            }
+    /**
+     * End the match around a player who left. The disconnect event is the whole
+     * story, so the leaver is excluded from the standing sides explicitly: the
+     * player list may not have been updated yet at this point.
+     */
+    private fun resolveAbandon(server: MinecraftServer, uuid: UUID, name: String) {
+        if (phase.get() != Phase.PLAYING) return
+        val online = server.playerList.players.map { it.uuid }.toSet() - uuid
+
+        // A side still has someone on the field only if at least one of its
+        // players is online; awarding a win to an empty server is the bug the
+        // void case exists for.
+        val standing = config.teams.indices.filter { side ->
+            config.teams[side].any { it.uuid in online }
         }
-
-        abandonTimer = scheduler.schedule({
-            if (phase.get() != Phase.PLAYING) return@schedule
-            val online = server.playerList.players.map { it.uuid }.toSet()
-            if (uuid in online) return@schedule // they came back
-
-            if (opponent.uuid !in online) {
-                // both players are gone — there is no one to award the win to
-                log.warn("[yabranked] both players disconnected; voiding match")
-                forcedOutcome.set(WireOutcome.VOID)
-            } else {
-                log.warn("[yabranked] ${leaver.name} did not return; ${opponent.name} wins by forfeit")
-                forfeiter.set(uuid)
-                forcedOutcome.set(
-                    if (uuid == config.playerA.uuid) WireOutcome.TEAM_B_WIN else WireOutcome.TEAM_A_WIN
-                )
-                announce(server, "§6${opponent.name} wins by forfeit — §7${leaver.name} did not return.")
-            }
-            server.execute { command(server, "bingo end") }
-            // onGameEnded picks up forcedOutcome from here
-        }, forfeitSeconds, TimeUnit.SECONDS)
+        val leaverSide = sideOf(uuid)
+        val winner = standing.singleOrNull()
+        if (winner == null || winner == leaverSide) {
+            log.warn("[yabranked] nobody left to award the win to; voiding match")
+            forcedOutcome.set(WireOutcome.VOID)
+        } else {
+            val winnerNames = config.teams[winner].joinToString(", ") { it.name }
+            log.warn("[yabranked] $name left the match; $winnerNames win by forfeit")
+            forfeiter.set(uuid)
+            forcedOutcome.set(defeatOf(leaverSide))
+            winningSide.set(winner)
+            announce(server, "§6$winnerNames win by forfeit — §7$name left the match.")
+        }
+        server.execute { command(server, "bingo end") }
+        // onGameEnded picks up forcedOutcome from here
     }
 
     private fun teamScore(playerUuid: UUID): Int {
         val api = BingoApi.INSTANCE ?: return 0
         return api.teams.firstOrNull { playerUuid in it.players }?.score?.items ?: 0
     }
+
+    /** Every side's score, in the backend's side order. */
+    private fun teamScores(): List<Int> =
+        config.teams.map { side -> side.firstOrNull()?.let { teamScore(it.uuid) } ?: 0 }
 
     private fun onGameEnded(event: GameEndedEvent) {
         val server = this.server ?: return
@@ -374,10 +463,14 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
         val outcome = forcedOutcome.get() ?: run {
             val winnerPlayers = event.winningTeam?.players.orEmpty()
-            when {
-                config.playerA.uuid in winnerPlayers -> WireOutcome.TEAM_A_WIN
-                config.playerB.uuid in winnerPlayers -> WireOutcome.TEAM_B_WIN
-                else -> WireOutcome.DRAW
+            // YAB reports the winning team as a set of players; map it back to
+            // the side the backend knows, which is what the ladder is keyed on.
+            val side = config.teams.indices.firstOrNull { index ->
+                config.teams[index].any { it.uuid in winnerPlayers }
+            }
+            if (side == null) WireOutcome.DRAW else {
+                winningSide.set(side)
+                if (side == 0) WireOutcome.TEAM_A_WIN else WireOutcome.TEAM_B_WIN
             }
         }
 
@@ -389,6 +482,9 @@ class YabRankedAgent : DedicatedServerModInitializer {
     }
 
     private fun reportAndShutdown(server: MinecraftServer, outcome: WireOutcome, durationSeconds: Long) {
+        replay.stop()
+        replay.mark(WireReplayEventType.GAME_END, detail = "Match ended: $outcome")
+        val recording = replay.build(durationSeconds)
         val report = WireResultReport(
             matchId = config.matchId,
             outcome = outcome,
@@ -396,49 +492,86 @@ class YabRankedAgent : DedicatedServerModInitializer {
             teamAScore = teamScore(config.playerA.uuid),
             teamBScore = teamScore(config.playerB.uuid),
             forfeitedBy = forfeiter.get()?.toString(),
+            // Only sent for matches the two-side view cannot describe; a 1v1
+            // report stays byte-for-byte what it always was.
+            winningTeam = winningSide.get().takeIf { config.teams.size > 2 },
+            teamScores = if (config.teams.size > 2) teamScores() else emptyList(),
         )
         log.info("[yabranked] reporting result: $report")
 
         // report from the scheduler thread — never block the server thread on HTTP
         scheduler.execute {
+            // Replay first, result second, and the order is load-bearing.
+            //
+            // Settling a match is what fires the orchestrator's teardown, and
+            // teardown is `docker rm -f` on this very container. Uploading
+            // afterwards means racing our own destruction, which the container
+            // reliably loses: the recording was built, logged as sent, and never
+            // arrived, so every player pressing "Save replay" was told there was
+            // nothing to save. Nothing about the upload needs a settled match —
+            // the row exists from creation and the route only checks the token —
+            // so it goes first, where the container is still guaranteed alive.
+            //
+            // The recorder's own checkpoints cover the settles this path never
+            // sees at all, i.e. a match ended over a player's bearer token.
+            if (recording != null && !replay.flush(recording)) {
+                log.warn("[yabranked] replay upload failed; the match itself is unaffected")
+            }
             if (!reporter.reportResult(report)) {
                 log.error("[yabranked] FAILED to deliver result after retries; container logs are the evidence")
             }
-            // Keep the server up so players can read YAB's game-over screen
-            // (scored items, times, winner) instead of being kicked mid-celebration.
-            lingerThenShutdown(server)
+            endSessionAndShutdown(server)
         }
     }
 
     /**
-     * Post-match linger: players stay on the server with the results screen up
-     * and are warned before the server closes, so the disconnect is never a
-     * surprise. They leave whenever they want; the container dies either way.
+     * End the session the moment the result is in: send everyone back to their
+     * ranked client, then halt.
+     *
+     * There is deliberately **no linger on the match server**. Two reasons, and
+     * they point the same way:
+     *
+     * - **The postgame screen is a trap, not a feature.** This is still a *YAB*
+     *   server. YAB's own POSTGAME ends the instant a surviving player presses
+     *   ready — "return to lobby" — and ending it resets the worlds and drops
+     *   everyone into a fresh bingo lobby game on a new team. A ranked match that
+     *   hands its players a lobby game is broken, and no linger short enough to
+     *   be safe is long enough to be useful: the button is there for as long as
+     *   the window is.
+     * - **The result screen hangs off `DISCONNECT`.** `YabRankedClient.matchEnded`
+     *   is only reached when the connection drops, so every second spent lingering
+     *   was a second the player sat on YAB's screen waiting for the ranked result
+     *   that is the actual point of a ranked match.
+     *
+     * The recording is already safe by the time this runs — `replay.flush` is
+     * synchronous and completes before the result report — so halting promptly
+     * costs nothing. [AgentConfig.postgameSeconds] now bounds only the last few
+     * seconds between the disconnect and the halt, and the orchestrator's
+     * `settleGrace` is derived from it, so the container still outlives the
+     * process rather than being killed mid-write.
      */
-    private fun lingerThenShutdown(server: MinecraftServer) {
-        val linger = config.postgameSeconds
-        log.info("[yabranked] match over; keeping server up for ${linger}s so players can review the results")
-
-        announce(server, "§6Match complete! §7Results are on screen — queue again from the Ranked menu when you're ready.")
-
-        // warn at 60s and 15s remaining (only those that fit inside the window)
-        for (remaining in listOf(60L, 15L)) {
-            if (linger > remaining) {
-                scheduler.schedule(
-                    { announce(server, "§7This match server closes in §e${remaining}s§7.") },
-                    linger - remaining,
-                    TimeUnit.SECONDS,
-                )
-            }
-        }
-
-        scheduleShutdown(server, delaySeconds = linger)
+    private fun endSessionAndShutdown(server: MinecraftServer) {
+        log.info("[yabranked] match over; returning players to their ranked client")
+        announce(server, "§6Match complete! §7Returning you to the ranked menu.")
+        // Grace, not a linger: long enough for the announce to land and the
+        // disconnect packets to flush, short enough that nobody can press ready.
+        scheduleShutdown(server, delaySeconds = config.postgameSeconds.coerceIn(1, MAX_WIND_DOWN_SECONDS))
     }
 
     private fun scheduleShutdown(server: MinecraftServer, delaySeconds: Long) {
         scheduler.schedule({
             log.info("[yabranked] shutting down match server")
-            server.halt(false)
+            // Disconnected with a reason, rather than dropped when the socket
+            // dies with the process: the client's whole wind-down — result
+            // screen, queue button, "you are no longer in a match" — hangs off
+            // DISCONNECT, and a killed connection makes it vanilla's
+            // "Connection lost" instead.
+            server.execute {
+                for (player in server.playerList.players.toList()) {
+                    player.connection.disconnect(Component.literal("Match complete — see your result in the Ranked menu."))
+                }
+            }
+            scheduler.schedule({ server.halt(false) }, 1, TimeUnit.SECONDS)
         }, delaySeconds, TimeUnit.SECONDS)
     }
 }

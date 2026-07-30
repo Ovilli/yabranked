@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlin.time.Duration.Companion.milliseconds
 
 private class FakeRuntime : ContainerRuntime {
     val started = ConcurrentLinkedQueue<Triple<String, String, Map<String, String>>>()
@@ -54,6 +55,12 @@ private class FakeRuntime : ContainerRuntime {
     /** Containers still "running": started, minus the ones already removed. */
     override fun list(namePrefix: String): List<String> =
         started.map { it.first }.filter { it.startsWith(namePrefix) && it !in removed }
+
+    /** Containers the test has declared dead without going through [remove]. */
+    val died = ConcurrentLinkedQueue<String>()
+
+    override fun isRunning(name: String): Boolean =
+        name !in died && name !in removed && started.any { it.first == name }
 }
 
 class MatchOrchestratorTest {
@@ -68,6 +75,9 @@ class MatchOrchestratorTest {
             publicHost = "match.example.com",
             backendUrlForAgents = "http://localhost:8080",
             limits = ContainerLimits(memory = "4g", cpus = "2"),
+            // Production waits out the postgame linger before reaping a decided
+            // match; a test only needs the ordering, not the three minutes.
+            settleGrace = 300.milliseconds,
         ),
         runtime = runtime,
         matchService = matchService,
@@ -156,6 +166,54 @@ class MatchOrchestratorTest {
         }
     }
 
+    /**
+     * The container outlives the result by the grace period, because it is
+     * still doing two things at that moment: uploading the match's replay, and
+     * showing both players the game-over screen. Killing it the instant the
+     * result landed lost the recording of every match settled from the client
+     * side — which is what "no replay was recorded for that match" meant.
+     */
+    @Test
+    fun `a decided match keeps its container for the postgame grace`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        try {
+            orchestrator.start(scope)
+            val match = createMatch()
+            awaitTrue { runtime.started.isNotEmpty() }
+            matchService.markReady(match.id.toString(), match.serverToken)
+
+            // Settled by the player, not by the agent: exactly the case where
+            // the container still has an upload to finish.
+            matchService.forfeit(match.id, match.playerA)
+
+            Thread.sleep(100)
+            assertTrue(runtime.removed.isEmpty(), "the container was reaped before it could finish uploading")
+
+            awaitTrue { runtime.removed.isNotEmpty() }
+            assertEquals("yabranked-${match.id}", runtime.removed.first())
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /** Nothing is worth waiting for on a match that never happened. */
+    @Test
+    fun `a voided match is torn down at once`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        try {
+            orchestrator.start(scope)
+            val match = createMatch()
+            awaitTrue { runtime.started.isNotEmpty() }
+
+            matchService.voidMatch(match.id)
+
+            awaitTrue(timeoutMs = 250) { runtime.removed.isNotEmpty() }
+            assertEquals("yabranked-${match.id}", runtime.removed.first())
+        } finally {
+            scope.cancel()
+        }
+    }
+
     @Test
     fun `reconcile voids matches orphaned by a restart and sweeps their containers`() {
         val match = createMatch() // no orchestrator running: nothing provisioned it
@@ -225,6 +283,68 @@ class MatchOrchestratorTest {
             val match = createMatch()
 
             awaitTrue { matches.get(match.id)?.status == MatchStatus.VOIDED }
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    /** An orchestrator that sweeps often enough for a test to watch it. */
+    private fun brisk() = MatchOrchestrator(
+        config = OrchestratorConfig(
+            image = "yabranked-match:test",
+            publicHost = "match.example.com",
+            backendUrlForAgents = "http://localhost:8080",
+            livenessInterval = 50.milliseconds,
+        ),
+        runtime = runtime,
+        matchService = matchService,
+        matches = matches,
+        players = players,
+    )
+
+    @Test
+    fun `voids a match whose container dies after it went live`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        try {
+            brisk().start(scope)
+            val match = createMatch()
+            awaitTrue { runtime.started.isNotEmpty() }
+            val name = runtime.started.first().first
+            // The match is up and being played; then the server dies — a crash,
+            // an OOM kill, or the vanilla watchdog calling a long worldgen tick
+            // a hang. Nothing reports a result, because nothing is left to.
+            matchService.markReady(match.id.toString(), match.serverToken)
+            awaitTrue { matches.get(match.id)?.status == MatchStatus.ACTIVE }
+            runtime.died.add(name)
+
+            awaitTrue {
+                matches.get(match.id)?.status == MatchStatus.VOIDED
+            }
+            assertTrue(name in runtime.removed, "the dead container was never cleaned up")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a live container is left alone by the sweep`() {
+        val scope = CoroutineScope(Dispatchers.Default)
+        try {
+            brisk().start(scope)
+            val match = createMatch()
+            awaitTrue { runtime.started.isNotEmpty() }
+            matchService.markReady(match.id.toString(), match.serverToken)
+            awaitTrue { matches.get(match.id)?.status == MatchStatus.ACTIVE }
+
+            // Several sweeps' worth of a perfectly healthy match.
+            Thread.sleep(300)
+
+            assertEquals(
+                MatchStatus.ACTIVE,
+                matches.get(match.id)?.status,
+                "the sweep voided a match that was still being played",
+            )
+            assertTrue(runtime.removed.isEmpty())
         } finally {
             scope.cancel()
         }

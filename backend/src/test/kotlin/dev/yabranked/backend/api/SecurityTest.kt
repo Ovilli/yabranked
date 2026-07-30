@@ -22,6 +22,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
@@ -320,6 +321,63 @@ class SecurityTest {
         )
         socket.close()
     }
+
+    @Test
+    fun `a profile save cannot undo a ban that landed under it`() = testApplication {
+        // The profile editor rewrites the whole player row, so it has to read
+        // that row under its lock. Reading it unlocked and writing it back a
+        // dispatcher hop later puts every column back as it was — including
+        // bannedAt, which is how a player who happened to be on their settings
+        // screen used to unban themselves by pressing Save.
+        val racing = StaleReadPlayerStore(players)
+        application {
+            rankedApi(
+                ApiDependencies(
+                    verifier = FakeSessionVerifier(),
+                    players = racing,
+                    matches = matches,
+                    matchService = matchService,
+                    queueService = queueService,
+                )
+            )
+        }
+        val client = jsonClient()
+        val session = login("Sneaky")
+        val uuid = UUID.fromString(session.profile.uuid)
+        val beforeBan = assertNotNull(players.getPlayer(uuid))
+
+        // The ban commits while the editor is mid-request: the unlocked read it
+        // already did still sees the row from before, the locked one would have
+        // serialized behind the ban.
+        players.upsertPlayer(beforeBan.copy(bannedAt = Instant.now()))
+        racing.stale[uuid] = beforeBan
+
+        val saved = client.put("/v1/players/me") {
+            header("Authorization", "Bearer ${session.token}")
+            contentType(ContentType.Application.Json)
+            setBody(dev.yabranked.proto.ProfileUpdate(country = "se"))
+        }
+        assertEquals(HttpStatusCode.OK, saved.status)
+
+        val after = assertNotNull(players.getPlayer(uuid))
+        assertTrue(after.isBanned, "saving a profile lifted the player's ban")
+        assertEquals("se", after.country, "the save itself never happened")
+    }
+}
+
+/**
+ * A [dev.yabranked.backend.store.PlayerStore] whose *unlocked* read can lag
+ * behind a committed write, which is exactly what makes an unlocked
+ * read-modify-write lose. The locking accessor is left delegating, so it always
+ * sees the truth — the difference the real `FOR UPDATE` buys.
+ */
+private class StaleReadPlayerStore(
+    private val delegate: dev.yabranked.backend.store.PlayerStore,
+) : dev.yabranked.backend.store.PlayerStore by delegate {
+    val stale = java.util.concurrent.ConcurrentHashMap<UUID, dev.yabranked.backend.store.PlayerRecord>()
+
+    override fun getPlayer(uuid: UUID): dev.yabranked.backend.store.PlayerRecord? =
+        stale[uuid] ?: delegate.getPlayer(uuid)
 }
 
 private suspend fun io.ktor.websocket.WebSocketSession.nextQueueMessage():

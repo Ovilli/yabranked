@@ -9,9 +9,7 @@ import dev.yabranked.client.ui.RankedButton
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
-import net.minecraft.client.resources.sounds.SimpleSoundInstance
 import net.minecraft.network.chat.Component
-import net.minecraft.sounds.SoundEvents
 import org.lwjgl.glfw.GLFW
 
 class MatchHistoryScreen(
@@ -43,7 +41,7 @@ class MatchHistoryScreen(
 
     /** Rating trend points, oldest→newest, dropping matches that never counted. */
     private fun chartPoints(list: List<MatchHistoryEntry>): List<Ui.ChartPoint> =
-        list.filter { it.ratingAfter != null }
+        list.filter { it.rated && it.ratingAfter != null }
             .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
             .reversed()
 
@@ -133,8 +131,11 @@ class MatchHistoryScreen(
         val points = chartPoints(list)
         if (!searching && points.size >= 2) {
             Ui.eloChart(g, font, left, CHART_TOP, WIDTH, CHART_HEIGHT, points, mouseX, mouseY)
-            // expand affordance, tucked at the plot's top-right (clear of the axis)
-            val hint = "⤢ expand"
+            // Expand affordance, tucked at the plot's top-right (clear of the
+            // axis). Plain words, not a glyph: U+2922 is outside the default font's
+            // coverage and rendered as a missing-character box, so the one cue
+            // that the chart opens into a zoomable view read as an artefact.
+            val hint = "click to zoom"
             g.text(font, "§8$hint", left + WIDTH - 32 - font.width(hint) - 2, CHART_TOP + 1, Ui.TEXT_FAINT)
             rowsTop = CHART_TOP + CHART_HEIGHT + 6
         }
@@ -145,7 +146,7 @@ class MatchHistoryScreen(
             Ui.fadeIn(g, width, height, openedAt)
             return
         }
-        val visible = ((height - 40 - rowsTop) / ROW_HEIGHT).coerceAtLeast(1)
+        val visible = visibleRows()
         selected = selected.coerceIn(-1, shown.size - 1)
         scroll = scroll.coerceIn(0, (shown.size - visible).coerceAtLeast(0))
         for (i in 0 until visible) {
@@ -160,8 +161,13 @@ class MatchHistoryScreen(
         Ui.fadeIn(g, width, height, openedAt)
     }
 
+    /** Rows that fit between [rowsTop] and the Back button. The single source
+     *  for the row count, so render, hit-testing and keyboard scrolling can
+     *  never disagree about which row is where. */
+    private fun visibleRows() = ((height - BOTTOM_CONTROLS - rowsTop) / ROW_HEIGHT).coerceAtLeast(1)
+
     private fun ensureVisible() {
-        val v = ((height - 40 - rowsTop) / ROW_HEIGHT).coerceAtLeast(1)
+        val v = visibleRows()
         if (selected < scroll) scroll = selected
         else if (selected >= scroll + v) scroll = selected - v + 1
     }
@@ -236,11 +242,16 @@ class MatchHistoryScreen(
         val nameMax = (left + WIDTH - 66) - nx
         g.text(font, Ui.fit(font, entry.opponent.name, nameMax), nx, textY, Ui.WHITE)
 
-        // rating delta, or a dash for voided matches that never counted
-        val delta = entry.ratingAfter?.let { after ->
-            val diff = after - entry.ratingBefore
-            if (diff >= 0) "§a+$diff" else "§c$diff"
-        } ?: "§8—"
+        // Rating delta; a casual match says so rather than showing a swing it
+        // never had, and a voided one gets a dash.
+        val delta = when {
+            !entry.rated -> "§8casual"
+            entry.ratingAfter == null -> "§8—"
+            else -> {
+                val diff = entry.ratingAfter!! - entry.ratingBefore
+                if (diff >= 0) "§a+$diff" else "§c$diff"
+            }
+        }
         Ui.textRight(g, font, delta, left + WIDTH - 62, textY, Ui.TEXT_DIM)
         // when the match was played, so the list reads as a timeline
         val ago = Ui.relativeTime(entry.completedAt)
@@ -269,7 +280,7 @@ class MatchHistoryScreen(
             return true
         }
 
-        val visible = ((height - 40 - rowsTop) / ROW_HEIGHT).coerceAtLeast(1)
+        val visible = visibleRows()
         for (i in 0 until visible) {
             val index = i + scroll
             if (index >= shown.size) break
@@ -303,5 +314,9 @@ class MatchHistoryScreen(
         const val ROW_HEIGHT = 14
         const val CHART_TOP = 68 // chart sits below the search box (y=48..62)
         const val CHART_HEIGHT = 48
+
+        /** Height reserved at the bottom for the Back button (`height - 28`)
+         *  plus its margin, so the last row never lands on it. */
+        const val BOTTOM_CONTROLS = 40
     }
 }

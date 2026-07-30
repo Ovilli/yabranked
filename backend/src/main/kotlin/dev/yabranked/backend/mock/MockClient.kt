@@ -81,6 +81,8 @@ fun main() = runBlocking {
                     }
                     is QueueServerMessage.QueueError ->
                         error("queue error: ${message.message}")
+                    is QueueServerMessage.QueueCancelled ->
+                        error("queue cancelled: ${message.reason}")
                 }
             }
         }

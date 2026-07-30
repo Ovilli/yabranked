@@ -47,11 +47,16 @@ interface OrchestratorMetrics {
     fun provisionFailed(reason: String)
     fun provisionTimedOut()
 
+    /** A container that had already gone live was found dead. Alert on any rate
+     *  at all: it means matches are being voided by infrastructure, not played. */
+    fun serverDied()
+
     companion object {
         val NONE: OrchestratorMetrics = object : OrchestratorMetrics {
             override fun provisioned() {}
             override fun provisionFailed(reason: String) {}
             override fun provisionTimedOut() {}
+            override fun serverDied() {}
         }
     }
 }
@@ -132,6 +137,8 @@ class Metrics(
 
     /** The container came up but the agent never reported ready in time. */
     override fun provisionTimedOut() = provision("timeout")
+
+    override fun serverDied() = provision("died")
 
     private fun provision(result: String) {
         provisions.computeIfAbsent(result) {

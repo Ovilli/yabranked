@@ -26,6 +26,10 @@ class CountryPickerScreen(
 
     private fun matches(): List<String> = CountryData.search(search?.value.orEmpty())
 
+    /** Cell rows that fit above the status/current line. Shared by render and
+     *  hit-testing so the grid they walk is the same one. */
+    private fun visibleRows() = ((height - BOTTOM_STRIP - TOP) / CELL_H).coerceAtLeast(1)
+
     private val opened = FirstInit()
 
     override fun init() {
@@ -100,7 +104,7 @@ class CountryPickerScreen(
         }
 
         val rows = (list.size + COLS - 1) / COLS
-        val visibleRows = ((height - 40 - TOP) / CELL_H).coerceAtLeast(1)
+        val visibleRows = visibleRows()
         scroll = scroll.coerceIn(0, (rows - visibleRows).coerceAtLeast(0))
 
         for (r in 0 until visibleRows) {
@@ -149,7 +153,7 @@ class CountryPickerScreen(
         val left = width / 2 - WIDTH / 2
         val mx = event.x()
         val my = event.y()
-        val visibleRows = ((height - 40 - TOP) / CELL_H).coerceAtLeast(1)
+        val visibleRows = visibleRows()
         for (r in 0 until visibleRows) {
             val row = r + scroll
             for (c in 0 until COLS) {
@@ -158,6 +162,10 @@ class CountryPickerScreen(
                 val x = left + c * CELL_W
                 val y = TOP + r * CELL_H
                 if (mx >= x && mx < x + CELL_W - 2 && my >= y && my < y + CELL_H - 2) {
+                    // The cells are not widgets, so they owe the click the sound
+                    // a RankedButton would have played; the save round-trip that
+                    // ends in Sfx.success is a second or two away.
+                    Sfx.select()
                     choose(list[idx])
                     return true
                 }
@@ -183,5 +191,10 @@ class CountryPickerScreen(
         const val CELL_W = WIDTH / COLS
         const val CELL_H = 20
         const val TOP = 60
+
+        /** Bottom strip the grid must clear: the status/current line at
+         *  `height - 44` and Back at `height - 28` below it. At the old
+         *  40px reserve the last row of flags was drawn under that line. */
+        const val BOTTOM_STRIP = 52
     }
 }

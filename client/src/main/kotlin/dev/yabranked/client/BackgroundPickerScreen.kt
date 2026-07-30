@@ -106,6 +106,10 @@ class BackgroundPickerScreen(
             val x = left + (i % COLS) * CELL_W
             val y = TOP + (i / COLS) * CELL_H
             if (event.x() >= x && event.x() < x + CELL_W - 6 && event.y() >= y && event.y() < y + CELL_H - 6) {
+                // The swatches are not widgets, so they owe the click the sound
+                // a RankedButton would have played; the save round-trip that
+                // ends in Sfx.success is a second or two away.
+                Sfx.select()
                 choose(id)
                 return true
             }

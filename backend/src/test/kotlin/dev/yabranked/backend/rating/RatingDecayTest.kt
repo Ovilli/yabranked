@@ -174,6 +174,39 @@ class DecaySweepTest {
     }
 
     @Test
+    fun `a match settled under the sweep is not rolled back by it`() {
+        // The ladder scan is a plain, unlocked read and upsertStats replaces
+        // every column, so charging the copy the scan handed back wrote the row
+        // as it was before anything that settled in between: the win, the
+        // matches played and the rating it earned all silently reverted.
+        val idle = ladderPlayer(2000, lastPlayedDaysAgo = policy.graceDays + 5)
+
+        val racing = object : dev.yabranked.backend.store.PlayerStore by players {
+            override fun topByRating(season: Int, limit: Int, minMatches: Int): List<SeasonStats> {
+                val scanned = players.topByRating(season, limit, minMatches)
+                // a settle lands the instant after the scan read the rows
+                for (row in scanned) {
+                    players.upsertStats(
+                        row.copy(
+                            rating = row.rating + 40,
+                            matchesPlayed = row.matchesPlayed + 1,
+                            wins = row.wins + 1,
+                        )
+                    )
+                }
+                return scanned
+            }
+        }
+
+        DecaySweep(racing, seasons, rating, clock = clock).sweep()
+
+        val after = players.getStats(idle, seasons.currentSeason)!!
+        assertEquals(11, after.wins, "the sweep put back the row from before the match settled")
+        assertEquals(11, after.matchesPlayed)
+        assertTrue(after.rating < 2040, "the settled rating was never charged")
+    }
+
+    @Test
     fun `decay resumes as more idle days accumulate`() {
         val idle = ladderPlayer(2000, lastPlayedDaysAgo = policy.graceDays + 1)
         sweep.sweep()

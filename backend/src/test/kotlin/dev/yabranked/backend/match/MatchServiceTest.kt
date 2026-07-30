@@ -218,6 +218,26 @@ class MatchServiceTest {
     }
 
     @Test
+    fun `a casual match records no rating movement at all`() {
+        val (a, b) = makeMatch()
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.CASUAL_LOCKOUT)
+
+        val settled = service.settle(
+            MatchResultReport(match.id.toString(), MatchOutcome.TEAM_A_WIN, 600, 10, 5),
+            match.serverToken,
+        )
+
+        // The after-ratings used to be filled in with what the ladder *would*
+        // have done, which is what made the result screen of a casual game show
+        // an MMR swing next to a rating that had not moved.
+        val record = assertIs<MatchService.SettleResult.Settled>(settled).match
+        assertEquals(record.ratingABefore, record.ratingAAfter)
+        assertEquals(record.ratingBBefore, record.ratingBAfter)
+        assertEquals(1000, rating(a))
+        assertEquals(1000, rating(b))
+    }
+
+    @Test
     fun `a casual match does not touch the inactivity clock`() {
         val (a, b) = makeMatch()
         val match = service.createMatch(queueMatch(a, b), MatchFormat.CASUAL_LOCKOUT)
@@ -259,5 +279,111 @@ class MatchServiceTest {
         assertEquals(pending.size, stats.wins, "wins were clobbered by a concurrent settle")
         assertEquals(pending.size, stats.matchesPlayed)
         assertEquals(pending.size * 600L, stats.playtimeSeconds)
+    }
+
+    // --- forfeit from the client, with no match-server token ---
+
+    @Test
+    fun `forfeiting settles the match as a loss for the player who conceded`() {
+        val (a, b) = makeMatch()
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+        val ratingBefore = rating(a)
+
+        val result = service.forfeit(match.id, a)
+
+        assertIs<MatchService.SettleResult.Settled>(result)
+        val settled = assertNotNull(matches.get(match.id))
+        assertEquals(MatchStatus.COMPLETED, settled.status)
+        assertEquals(MatchOutcome.TEAM_B_WIN, settled.outcome, "the conceder's side must lose")
+        assertEquals(a, settled.forfeitedBy)
+        assertEquals(1, service.statsFor(a).losses)
+        assertEquals(1, service.statsFor(b).wins)
+        assertEquals(1, service.statsFor(a).forfeits, "the forfeit was not counted against them")
+        assertTrue(rating(a) < ratingBefore, "conceding did not cost the player any rating")
+    }
+
+    @Test
+    fun `a stranger cannot forfeit somebody else's match`() {
+        val (a, b) = makeMatch()
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+        val outsider = UUID.randomUUID().also { service.getOrCreatePlayer(it, "Outsider") }
+
+        assertIs<MatchService.SettleResult.NotAParticipant>(service.forfeit(match.id, outsider))
+        assertEquals(
+            MatchStatus.PENDING,
+            assertNotNull(matches.get(match.id)).status,
+            "an outsider's forfeit touched the match",
+        )
+    }
+
+    @Test
+    fun `forfeiting a match the agent already reported changes nothing`() {
+        val (a, b) = makeMatch()
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+        // The agent gets there first — the normal race when a player quits the
+        // container and the client's forfeit call is still in flight.
+        service.settle(
+            MatchResultReport(match.id.toString(), MatchOutcome.TEAM_A_WIN, 600, 10, 5),
+            match.serverToken,
+        )
+
+        assertIs<MatchService.SettleResult.AlreadySettled>(service.forfeit(match.id, a))
+        assertEquals(
+            MatchOutcome.TEAM_A_WIN,
+            assertNotNull(matches.get(match.id)).outcome,
+            "the late forfeit overwrote a settled result",
+        )
+        assertEquals(1, service.statsFor(a).wins, "the result was applied twice")
+    }
+
+    @Test
+    fun `forfeiting fires the teardown listeners so the container is reaped`() {
+        val (a, b) = makeMatch()
+        val torndown = mutableListOf<UUID>()
+        service.onMatchSettled { torndown += it.id }
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+
+        service.forfeit(match.id, a)
+
+        assertEquals(listOf(match.id), torndown, "nothing would stop this match's server")
+    }
+
+    @Test
+    fun `a listener that throws does not fail the settle it is only being told about`() {
+        // Every settled listener does slow, fallible container I/O on a record
+        // that is already committed. A throw used to come straight out of
+        // settle(), so the agent was answered 500 for a match that *had*
+        // settled — and the teardown listener behind the failing one, which is
+        // what stops the container, never ran at all.
+        val (a, b) = makeMatch()
+        val torndown = mutableListOf<UUID>()
+        service.onMatchSettled { error("docker rm failed") }
+        service.onMatchSettled { torndown += it.id }
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+
+        val result = service.settle(
+            MatchResultReport(match.id.toString(), MatchOutcome.TEAM_A_WIN, 600, 10, 5),
+            match.serverToken,
+        )
+
+        assertIs<MatchService.SettleResult.Settled>(result, "a listener failure was reported as a settle failure")
+        assertEquals(listOf(match.id), torndown, "the listener behind the failing one never ran")
+    }
+
+    @Test
+    fun `a created-listener that throws still returns the match it created`() {
+        // createMatch's caller is the matchmaking tick, which treats a throw as
+        // "the match was not created" and puts the tickets back — so the same
+        // players get paired again while the first, orphaned match row sits
+        // PENDING with nothing left to provision it.
+        val (a, b) = makeMatch()
+        val provisioned = mutableListOf<UUID>()
+        service.onMatchCreated { error("no free port") }
+        service.onMatchCreated { provisioned += it.id }
+
+        val match = service.createMatch(queueMatch(a, b), MatchFormat.LOCKOUT_1V1)
+
+        assertEquals(listOf(match.id), provisioned, "the listener behind the failing one never ran")
+        assertNotNull(matches.get(match.id))
     }
 }

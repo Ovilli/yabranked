@@ -66,6 +66,24 @@ open class UiPalette {
      */
     fun alpha(color: Int, a: Int): Int = (a shl 24) or (color and 0x00FFFFFF)
 
+    /**
+     * One colour per side of a match, for anything that draws several sides at
+     * once — the replay board and its movement tracks.
+     *
+     * Not WIN/LOSS: those mean "your result", and a replay is watched from
+     * outside the match as often as from inside it. Hues are spread far enough
+     * apart to stay tellable, and the viewer always labels tracks with the
+     * player's name as well, because colour alone is never the only cue.
+     */
+    fun sideColor(index: Int): Int = SIDE_COLORS[index.coerceAtLeast(0) % SIDE_COLORS.size]
+
+    private val SIDE_COLORS = intArrayOf(
+        0xFFFFC93C.toInt(), // gold
+        0xFF3FD0D8.toInt(), // cyan
+        0xFFB07CE8.toInt(), // violet
+        0xFFE8913B.toInt(), // amber
+    )
+
     /** Tier colours, matching the metal each tier is named after. */
     fun tierColor(tier: String): Int = when (tier.substringBefore(' ')) {
         "Coal" -> 0xFF4A4A4A.toInt()

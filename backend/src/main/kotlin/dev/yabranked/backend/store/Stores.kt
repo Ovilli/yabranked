@@ -3,6 +3,8 @@ package dev.yabranked.backend.store
 import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchSettings
+import dev.yabranked.proto.PrivacySettings
+import dev.yabranked.proto.Visibility
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -17,12 +19,43 @@ data class PlayerRecord(
     val country: String? = null,
     /** Profile-card background id; "default" when unset. */
     val background: String = "default",
-    /** Hide the country flag from other players' views. */
+    /**
+     * Hide the country flag from other players' views.
+     *
+     * Legacy mirror of [privacy]; both are persisted because clients that
+     * predate the privacy block still read these two. [withPrivacy] is the only
+     * thing that should ever set them, so the two views cannot disagree.
+     */
     val hideFlag: Boolean = false,
     /** Hide the exact rating on the public profile and match-found reveal. */
     val hideRating: Boolean = false,
+    /** Full privacy preferences; the authority for every gated profile field. */
+    val privacy: PrivacySettings = PrivacySettings(),
 ) {
     val isBanned: Boolean get() = bannedAt != null
+
+    /**
+     * Set [privacy] and re-derive the legacy booleans from it. Anything less
+     * than [Visibility.EVERYONE] reads as "hidden" to an old client, which is
+     * the safe direction to round: it under-shares rather than over-shares.
+     */
+    fun withPrivacy(settings: PrivacySettings): PlayerRecord = copy(
+        privacy = settings,
+        hideFlag = settings.showCountry != Visibility.EVERYONE,
+        hideRating = settings.showRating != Visibility.EVERYONE,
+    )
+
+    companion object {
+        /**
+         * Privacy for a row written before the block existed: reconstruct it
+         * from the legacy booleans so an upgrade does not silently re-expose a
+         * flag the player had hidden.
+         */
+        fun privacyFromLegacy(hideFlag: Boolean, hideRating: Boolean) = PrivacySettings(
+            showCountry = if (hideFlag) Visibility.NOBODY else Visibility.EVERYONE,
+            showRating = if (hideRating) Visibility.NOBODY else Visibility.EVERYONE,
+        )
+    }
 }
 
 /** Ladder stats for one player in one season. */
@@ -122,9 +155,69 @@ data class MatchRecord(
     val forfeitedBy: UUID? = null,
     val createdAt: Instant,
     val completedAt: Instant?,
+    /**
+     * Full side-ordered rosters. A 1v1 leaves this empty and is described by
+     * [playerA]/[playerB] alone, which is what every pre-team query still reads;
+     * team and party matches fill it in and keep [playerA]/[playerB] pointing at
+     * each side's first player so those queries keep working.
+     */
+    val teams: List<List<UUID>> = emptyList(),
+    /** Side-ordered final scores for matches with more than two sides. */
+    val teamScores: List<Int> = emptyList(),
+    /** Winning side index for matches with more than two sides. */
+    val winningTeam: Int? = null,
+    /** Party this match was started from, for party-match history. */
+    val partyId: UUID? = null,
+    /**
+     * Whether this match may move ratings, decided once at creation.
+     *
+     * A rated format can still be played unrated — a party practising 2v2 with
+     * hand-picked teams, say — and that decision has to survive a restart, so it
+     * lives on the record rather than in the process that created it. Defaults
+     * to true so every row written before the field existed keeps counting.
+     */
+    val rated: Boolean = true,
 ) {
     /** Reached a real result: it counts for streaks and head-to-head records. */
     val isDecided: Boolean get() = outcome != null && outcome != MatchOutcome.VOID
+
+    /**
+     * Side-ordered rosters, synthesising the two-side view for a record that
+     * predates [teams]. Every team-aware caller reads this rather than the
+     * field, so old and new rows look identical from the outside.
+     */
+    val rosters: List<List<UUID>>
+        get() = if (teams.isNotEmpty()) teams else listOf(listOf(playerA), listOf(playerB))
+
+    /** Every participant, in side order. */
+    val participants: List<UUID> get() = rosters.flatten()
+
+    /** Which side [player] is on, or null when they are not in this match. */
+    fun sideOf(player: UUID): Int? = rosters.indexOfFirst { player in it }.takeIf { it >= 0 }
+
+    /** [player]'s teammates, excluding themselves. */
+    fun teammatesOf(player: UUID): List<UUID> =
+        sideOf(player)?.let { rosters[it].filter { other -> other != player } } ?: emptyList()
+
+    fun opponentsOf(player: UUID): List<UUID> {
+        val side = sideOf(player) ?: return emptyList()
+        return rosters.filterIndexed { index, _ -> index != side }.flatten()
+    }
+
+    /**
+     * Whether [player] won. Two-side matches read [outcome]; anything wider
+     * reads [winningTeam], which is the only thing that can express a winner
+     * among three or more sides.
+     */
+    fun didWin(player: UUID): Boolean {
+        val side = sideOf(player) ?: return false
+        winningTeam?.let { return it == side }
+        return when (outcome) {
+            MatchOutcome.TEAM_A_WIN -> side == 0
+            MatchOutcome.TEAM_B_WIN -> side == 1
+            else -> false
+        }
+    }
 }
 
 /**
@@ -184,6 +277,14 @@ interface PlayerStore {
     fun getPlayer(uuid: UUID): PlayerRecord?
 
     /**
+     * Like [getPlayer], but inside a transaction it also takes a row lock.
+     * Anything that rewrites a whole [PlayerRecord] has to read it through this
+     * — [upsertPlayer] replaces every column, so a row read outside the lock and
+     * written back later silently reverts whatever landed in between.
+     */
+    fun getPlayerForUpdate(uuid: UUID): PlayerRecord? = getPlayer(uuid)
+
+    /**
      * [getPlayer] for many accounts at once. Unknown uuids are simply absent
      * from the result; callers that render a list of players would otherwise
      * issue one query per row.
@@ -191,6 +292,15 @@ interface PlayerStore {
     fun getPlayers(uuids: Collection<UUID>): Map<UUID, PlayerRecord>
 
     fun upsertPlayer(record: PlayerRecord)
+
+    /**
+     * Exact name match, case-insensitive; null when nobody has used the mod
+     * under that name. Minecraft names are unique and re-assignable, so this
+     * resolves whoever currently holds it — which is the same account the
+     * player just saw in-game.
+     */
+    fun findByName(name: String): PlayerRecord?
+
     fun getStats(uuid: UUID, season: Int): SeasonStats?
 
     /**
@@ -247,12 +357,34 @@ interface MatchStore {
      * them) died with the previous process.
      */
     fun unsettled(): List<MatchRecord>
+
+    /**
+     * The match this player is currently in, newest first, or null.
+     *
+     * Separate from [unsettled] because the client asks this on an interval to
+     * find out whether the match it thinks it is in is really still running —
+     * scanning every live match in the process to answer for one player is the
+     * shape of query that is fine in memory and not fine in Postgres.
+     */
+    fun liveFor(player: UUID): MatchRecord?
 }
 
 interface ReportStore {
     fun insert(record: ReportRecord)
     fun list(limit: Int): List<ReportRecord>
     fun existsFor(matchId: UUID, reporter: UUID): Boolean
+
+    /**
+     * One report per accused per match, rather than one per match.
+     *
+     * A 4v4 has four opponents and they do not misbehave as a unit; the
+     * coarser check meant reporting one of them silently consumed the
+     * reporter's only report for that game.
+     */
+    fun existsFor(matchId: UUID, reporter: UUID, accused: UUID): Boolean
+
+    /** Every report filed about [matchId], for moderator review. */
+    fun forMatch(matchId: UUID): List<ReportRecord>
 }
 
 /** One unlocked achievement, identified by its stable catalog id. */
@@ -281,6 +413,9 @@ class InMemoryPlayerStore : PlayerStore {
     override fun upsertPlayer(record: PlayerRecord) {
         players[record.uuid] = record
     }
+
+    override fun findByName(name: String): PlayerRecord? =
+        players.values.firstOrNull { it.name.equals(name, ignoreCase = true) }
 
     override fun getStats(uuid: UUID, season: Int): SeasonStats? = stats[uuid to season]
 
@@ -325,15 +460,18 @@ class InMemoryMatchStore : MatchStore {
         matches[record.id] = record
     }
 
+    // Membership goes through `participants`/`sideOf` rather than playerA/playerB:
+    // in a team match those two are only the first player of each side, so
+    // matching on them alone would hide four of a 3v3's six players' own games.
     override fun historyFor(player: UUID, season: Int, limit: Int): List<MatchRecord> =
         matches.values
-            .filter { it.season == season && (it.playerA == player || it.playerB == player) }
+            .filter { it.season == season && player in it.participants }
             .sortedByDescending { it.createdAt }
             .take(limit)
 
     override fun recentDecided(player: UUID, season: Int, limit: Int): List<MatchRecord> =
         matches.values
-            .filter { it.season == season && (it.playerA == player || it.playerB == player) }
+            .filter { it.season == season && player in it.participants }
             .filter { it.isDecided }
             .sortedByDescending { it.createdAt }
             .take(limit)
@@ -341,8 +479,9 @@ class InMemoryMatchStore : MatchStore {
     override fun between(a: UUID, b: UUID, season: Int, limit: Int): List<MatchRecord> =
         matches.values
             .filter {
-                it.season == season &&
-                    ((it.playerA == a && it.playerB == b) || (it.playerA == b && it.playerB == a))
+                val sideA = it.sideOf(a)
+                val sideB = it.sideOf(b)
+                it.season == season && sideA != null && sideB != null && sideA != sideB
             }
             .filter { it.isDecided }
             .sortedByDescending { it.createdAt }
@@ -350,6 +489,9 @@ class InMemoryMatchStore : MatchStore {
 
     override fun unsettled(): List<MatchRecord> =
         matches.values.filter { it.status == MatchStatus.PENDING || it.status == MatchStatus.ACTIVE }
+
+    override fun liveFor(player: UUID): MatchRecord? =
+        unsettled().filter { player in it.participants }.maxByOrNull { it.createdAt }
 }
 
 class InMemoryReportStore : ReportStore {
@@ -364,6 +506,14 @@ class InMemoryReportStore : ReportStore {
 
     override fun existsFor(matchId: UUID, reporter: UUID): Boolean =
         reports.values.any { it.matchId == matchId && it.reporter == reporter }
+
+    override fun existsFor(matchId: UUID, reporter: UUID, accused: UUID): Boolean =
+        reports.values.any {
+            it.matchId == matchId && it.reporter == reporter && it.accused == accused
+        }
+
+    override fun forMatch(matchId: UUID): List<ReportRecord> =
+        reports.values.filter { it.matchId == matchId }.sortedBy { it.createdAt }
 }
 
 class InMemoryAchievementStore : AchievementStore {
