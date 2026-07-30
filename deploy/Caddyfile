@@ -1,0 +1,10 @@
+# Automatic HTTPS from Let's Encrypt.
+#
+# TLS is not optional here: a session token rides in an `Authorization` header on
+# every request the mod makes, so plain HTTP hands it to anyone on the path.
+#
+# Replace the hostname with your DDNS name and make sure ports 80 and 443 reach
+# this host — the certificate challenge needs 80.
+{$PUBLIC_HOSTNAME} {
+	reverse_proxy backend:8080
+}

@@ -1,0 +1,45 @@
+# YAB Ranked, whole stack, one host.
+#
+# Sized for a Raspberry Pi 5: the backend is light, the match containers are not,
+# and they share this machine. Bring it up with `docker compose up -d --build`
+# from this directory after filling in `.env`.
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Published on the host, not just to Caddy: match containers reach the
+      # backend at `host.docker.internal:8080`, which resolves to the host.
+      - "8080:8080"
+    volumes:
+      # The orchestrator starts match containers on *this* host's daemon.
+      #
+      # This is root-equivalent access to the machine. It is the standard way to
+      # run an orchestrator and it is why nothing else should share this host.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Replays. Point REPLAY_HOST_DIR at external storage if you have any — a
+      # match writes tens of megabytes, and SD cards die of exactly this.
+      - ${REPLAY_HOST_DIR:-./replays}:/data/replays
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      # Compose interpolates this from ./.env; the Caddyfile reads it as {$PUBLIC_HOSTNAME}.
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - backend
+
+volumes:
+  caddy_data:
+  caddy_config:

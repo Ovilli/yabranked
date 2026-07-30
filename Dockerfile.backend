@@ -31,7 +31,30 @@ RUN printf 'rootProject.name = "yabranked"\ninclude("proto")\ninclude("backend")
 RUN sed -i '/^org\.gradle\.java\.home/d' gradle.properties && \
     ./gradlew :backend:installDist --no-daemon -x test
 
+# The Docker CLI, for deployments that orchestrate matches.
+#
+# `ContainerRuntime` shells out to `docker`, so a containerised backend with the
+# socket mounted still cannot start a match without the binary — the socket is
+# the permission, not the tool. Only the client is taken (~50 MB); the daemon
+# stays on the host where it belongs.
+#
+# Dead weight on a host that sets no YABRANKED_ORCHESTRATE, which is the price of
+# one image that works in both places.
+FROM debian:bookworm-slim AS docker-cli
+ARG DOCKER_VERSION=29.6.2
+ARG TARGETARCH
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && case "$TARGETARCH" in \
+         amd64) DOCKER_ARCH=x86_64 ;; \
+         arm64) DOCKER_ARCH=aarch64 ;; \
+         *) echo "no static docker CLI for $TARGETARCH" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz" \
+       | tar -xz -C /usr/local/bin --strip-components=1 docker/docker \
+    && rm -rf /var/lib/apt/lists/*
+
 FROM eclipse-temurin:21-jre
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=build /app/backend/build/install/backend /app
 EXPOSE 8080
 CMD ["/app/bin/backend"]
