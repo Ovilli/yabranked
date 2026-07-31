@@ -6,6 +6,7 @@ import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.EditBox
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
@@ -14,7 +15,7 @@ import org.lwjgl.glfw.GLFW
 
 class MatchHistoryScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Match History")) {
+) : ScaledScreen(Component.literal("Match History")) {
 
     private var entries: Loadable<List<MatchHistoryEntry>> = Loadable.Loading
 
@@ -48,7 +49,7 @@ class MatchHistoryScreen(
     private val opened = FirstInit()
     private val loaded = FirstInit()
 
-    override fun init() {
+    override fun layout() {
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
         )
@@ -89,12 +90,12 @@ class MatchHistoryScreen(
         else -> Ui.TEXT_FAINT
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
@@ -258,8 +259,8 @@ class MatchHistoryScreen(
         if (ago.isNotEmpty()) Ui.textRight(g, font, "§8$ago", left + WIDTH - 10, textY, Ui.TEXT_FAINT)
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
-        if (super.mouseClicked(event, doubleClick)) return true
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (super.onMouseClicked(event, doubled)) return true
         if (event.button() != 0) return false
         val shown = filtered(entries.valueOrNull ?: return false)
 
@@ -295,7 +296,7 @@ class MatchHistoryScreen(
         return false
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
         val before = scroll
         if (vAmount > 0) scroll = (scroll - 1).coerceAtLeast(0) else if (vAmount < 0) scroll += 1
         if (scroll != before) Sfx.tick()

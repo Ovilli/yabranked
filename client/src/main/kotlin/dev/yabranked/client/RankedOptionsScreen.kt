@@ -3,6 +3,7 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -13,7 +14,7 @@ import net.minecraft.network.chat.Component
  */
 class RankedOptionsScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("YAB Ranked Options")) {
+) : ScaledScreen(Component.literal("YAB Ranked Options")) {
 
     private val toggles = mutableListOf<Toggle>()
 
@@ -35,7 +36,7 @@ class RankedOptionsScreen(
 
     private val opened = FirstInit()
 
-    override fun init() {
+    override fun layout() {
         toggles.clear()
         toggles += Toggle("Country flags", { RankedState.showFlags }, { RankedState.showFlags = it },
             "Show country flags next to names.")
@@ -139,12 +140,12 @@ class RankedOptionsScreen(
         return Component.literal("§f${t.label}: $state")
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
         g.centeredText(font, "§lOPTIONS", centerX, top - 24, Ui.ACCENT)
 

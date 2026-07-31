@@ -5,9 +5,9 @@ import dev.yabranked.proto.*
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
-import net.minecraft.client.gui.components.Tooltip
 import net.minecraft.client.gui.narration.NarratedElementType
 import net.minecraft.client.gui.narration.NarrationElementOutput
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.TitleScreen
 import net.minecraft.client.resources.sounds.SimpleSoundInstance
@@ -47,7 +47,7 @@ class MatchResultScreen(
     private val entry: MatchHistoryEntry,
     private val profileBefore: PlayerProfile?,
     private val profileAfter: PlayerProfile,
-) : Screen(resultTitle(entry)) {
+) : ScaledScreen(resultTitle(entry)) {
 
     /** Metal-band ordinal of a tier; -1 for Unranked. Division changes within a
      *  band do not count as a promotion/demotion. */
@@ -69,32 +69,26 @@ class MatchResultScreen(
     private var keepReplayButton: RankedButton? = null
     private var savingReplay = false
 
-    override fun init() {
+    override fun layout() {
         RankedState.onResultScreen = true
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Queue again (R)"), Ui.ICON_PLAY) { queueAgain() }
-        ).setTooltip(Tooltip.create(Component.literal("Rejoin the queue and return to the ranked menu")))
+        ).tip("Rejoin the queue and return to the ranked menu")
         // Quick actions row above the main button
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 76, 64, 20, Component.literal("History"), Ui.ICON_HISTORY) { openHistory() }
-        ).setTooltip(Tooltip.create(Component.literal("Browse your recent ranked matches")))
+        ).tip("Browse your recent ranked matches")
         addRenderableWidget(
             RankedButton(width / 2 - 32, height - 76, 64, 20, Component.literal("Copy ID")) { copyMatchId() }
-        ).setTooltip(Tooltip.create(Component.literal("Copy this match's ID to the clipboard")))
+        ).tip("Copy this match's ID to the clipboard")
         // Reporting lives here (post-match), not on the main menu: this is the
         // "player you recently played with". Hidden once the match is reported.
         addRenderableWidget(
             RankedButton(width / 2 + 36, height - 76, 64, 20, Component.literal("§cReport"), Ui.ICON_REPORT) { openReport() }
         ).apply {
             active = !RankedState.lastMatchReported
-            setTooltip(
-                Tooltip.create(
-                    Component.literal(
-                        if (active) "Report ${entry.opponent.name} for misconduct in this match"
-                        else "You have already reported this match"
-                    )
-                )
-            )
+            hoverTip = if (active) "Report ${entry.opponent.name} for misconduct in this match"
+                else "You have already reported this match"
         }
         // Only offered for modes that had teammates, and only while the match
         // is still inside the endorsement window — the backend decides both, and
@@ -125,7 +119,7 @@ class MatchResultScreen(
 
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Done"), Ui.ICON_BACK) { onClose() }
-        ).setTooltip(Tooltip.create(Component.literal("Close and return to the title screen")))
+        ).tip("Close and return to the title screen")
 
         val sound = when {
             promoted -> SoundEvents.UI_TOAST_CHALLENGE_COMPLETE
@@ -212,12 +206,12 @@ class MatchResultScreen(
         else -> Ui.TEXT_FAINT
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
         val headline = when (entry.result) {

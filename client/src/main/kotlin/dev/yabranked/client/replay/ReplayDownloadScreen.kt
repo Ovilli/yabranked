@@ -5,6 +5,7 @@ import dev.yabranked.client.YabRankedClient
 import dev.yabranked.client.ui.RankedButton
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 import java.util.concurrent.atomic.AtomicBoolean
@@ -27,7 +28,7 @@ class ReplayDownloadScreen(
     private val parent: Screen,
     private val matchId: String,
     private val subtitle: String,
-) : Screen(Component.literal("Replay")) {
+) : ScaledScreen(Component.literal("Replay")) {
 
     private var status = "Fetching the recording…"
     private var progress: ReplayCache.Progress? = null
@@ -36,7 +37,7 @@ class ReplayDownloadScreen(
     private var perspective = 0
     private val started = AtomicBoolean(false)
 
-    override fun init() {
+    override fun layout() {
         val ready = this.ready
         if (ready != null) {
             // One button per participant: this is the "through whose eyes" choice,
@@ -122,12 +123,12 @@ class ReplayDownloadScreen(
         }
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
 
         g.centeredText(font, "§lREPLAY", centerX, 24, Ui.ACCENT)

@@ -105,14 +105,18 @@ class YabRankedClient : ClientModInitializer {
         // never share a row.
         ScreenEvents.AFTER_INIT.register { client, screen, _, _ ->
             val ownsBadge = screen is RankedScreen || screen is MatchFoundScreen
-            ScreenEvents.afterExtract(screen).register { drawn, g, mouseX, mouseY, _ ->
+            ScreenEvents.afterExtract(screen).register { _, g, mouseX, mouseY, _ ->
                 val font = client.font
+                // The game's own width, not the screen's: a ScaledScreen lays
+                // itself out in a wider virtual viewport, and this draws outside
+                // that screen's transform — off the right edge if it used it.
+                val screenWidth = client.window.guiScaledWidth
                 var top = 4
                 if (QueueBadge.isVisible() && !ownsBadge) {
-                    QueueBadge.draw(g, font, drawn.width - QueueBadge.width(font) - 4, top)
+                    QueueBadge.draw(g, font, screenWidth - QueueBadge.width(font) - 4, top)
                     top += QueueBadge.HEIGHT + 4
                 }
-                RankedNotice.draw(g, font, drawn.width, top, mouseX, mouseY)
+                RankedNotice.draw(g, font, screenWidth, top, mouseX, mouseY)
             }
             // Only the dismiss button consumes a click; everything else falls
             // through to the screen, which is still what the player is using.

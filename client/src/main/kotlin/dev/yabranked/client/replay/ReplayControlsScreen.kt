@@ -4,6 +4,7 @@ import dev.yabranked.client.Sfx
 import dev.yabranked.client.ui.RankedButton
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -23,7 +24,7 @@ import net.minecraft.network.chat.Component
  * is moving. The world stays visible behind it for the same reason — this is a
  * panel over a match, not a menu instead of one.
  */
-class ReplayControlsScreen : Screen(Component.literal("Replay Controls")) {
+class ReplayControlsScreen : ScaledScreen(Component.literal("Replay Controls")) {
 
     /** Rebuilt every frame from the layout, like the other list screens. */
     private class Hit(val x: Int, val y: Int, val w: Int, val h: Int, val run: () -> Unit)
@@ -35,7 +36,7 @@ class ReplayControlsScreen : Screen(Component.literal("Replay Controls")) {
     private var barY = 0
     private var barW = 0
 
-    override fun init() {
+    override fun layout() {
         addRenderableWidget(
             RankedButton(
                 width / 2 - 100, height - 26, 200, 20,
@@ -47,12 +48,12 @@ class ReplayControlsScreen : Screen(Component.literal("Replay Controls")) {
     /** The recording plays on while this is open; that is the point of it. */
     override fun isPauseScreen(): Boolean = false
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         // No blur and no scrim: the match behind this is the thing being controlled.
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         hits.clear()
         val playback = ReplayViewer.playback ?: return onClose()
 
@@ -181,7 +182,7 @@ class ReplayControlsScreen : Screen(Component.literal("Replay Controls")) {
         hits += Hit(x, y, w, h, run)
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         for (hit in hits) {
             if (event.x() >= hit.x && event.x() < hit.x + hit.w &&
                 event.y() >= hit.y && event.y() < hit.y + hit.h
@@ -205,6 +206,6 @@ class ReplayControlsScreen : Screen(Component.literal("Replay Controls")) {
             Sfx.tick()
             return true
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 }

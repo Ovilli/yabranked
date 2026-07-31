@@ -3,6 +3,7 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.TitleScreen
 import net.minecraft.network.chat.Component
@@ -16,11 +17,11 @@ import net.minecraft.network.chat.Component
  */
 class MatchResultLoadingScreen(
     private val opponentName: String,
-) : Screen(Component.literal("Match Result")) {
+) : ScaledScreen(Component.literal("Match Result")) {
 
     private var ticks = 0
 
-    override fun init() {
+    override fun layout() {
         RankedState.onResultLoading = true
         RankedState.resultLoadingVisible = true
         // Escape hatch in case the result never arrives (server hiccup). Sits on
@@ -34,12 +35,12 @@ class MatchResultLoadingScreen(
         ticks++
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
 
         g.centeredText(font, "§lMATCH COMPLETE", centerX, height / 2 - 26, Ui.ACCENT)

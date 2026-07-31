@@ -7,10 +7,10 @@ import dev.yabranked.client.ui.Ui
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
-import net.minecraft.client.gui.components.Tooltip
 import net.minecraft.client.gui.narration.NarratedElementType
 import net.minecraft.client.gui.narration.NarrationElementOutput
 import net.minecraft.client.gui.screens.ConnectScreen
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.TitleScreen
 import net.minecraft.client.multiplayer.ServerData
@@ -29,7 +29,7 @@ class MatchFoundScreen(
     private val match: QueueServerMessage.MatchFound,
     // The title is also the narration message, so it names the opponent rather
     // than saying "Match Found" to someone who cannot see who they drew.
-) : Screen(Component.literal("Match found against ${match.opponent.name}")) {
+) : ScaledScreen(Component.literal("Match found against ${match.opponent.name}")) {
 
     private var ticksLeft = COUNTDOWN_TICKS
     private var connecting = false
@@ -39,10 +39,10 @@ class MatchFoundScreen(
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
 
-    override fun init() {
+    override fun layout() {
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 52, 200, 20, Component.literal("Join now"), Ui.ICON_PLAY) { connect() }
-        ).setTooltip(Tooltip.create(Component.literal("Skip the countdown and connect to the match server now")))
+        ).tip("Skip the countdown and connect to the match server now")
 
         minecraft.soundManager.play(
             SimpleSoundInstance.forUI(SoundEvents.UI_TOAST_CHALLENGE_COMPLETE, 1.0f)
@@ -95,12 +95,12 @@ class MatchFoundScreen(
         ConnectScreen.startConnecting(TitleScreen(), Minecraft.getInstance(), address, serverData, false, null)
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
         val self = RankedState.profile

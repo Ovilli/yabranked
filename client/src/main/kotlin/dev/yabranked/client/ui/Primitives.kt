@@ -205,6 +205,23 @@ open class UiPrimitives : UiPalette() {
         g.fill(thumbX, y, thumbX + thumbW, y + 2, THUMB)
     }
 
+    /**
+     * Small boxed hover label near the cursor, clamped to a [screenWidth]-wide
+     * screen.
+     *
+     * The ranked screens draw their own instead of using vanilla's widget
+     * tooltip: vanilla defers the draw until after the screen's render pass, so
+     * it lands outside [ScaledScreen]'s transform and would be positioned — and
+     * sized — in the game's coordinates rather than the screen's.
+     */
+    fun tooltip(g: GuiGraphicsExtractor, font: Font, mouseX: Int, mouseY: Int, text: String, screenWidth: Int) {
+        val w = font.width(text)
+        val x = (mouseX + 10).coerceAtMost(screenWidth - w - 6).coerceAtLeast(2)
+        val y = (mouseY - 14).coerceAtLeast(2)
+        panel(g, x - 3, y - 3, w + 6, 14)
+        g.text(font, text, x, y, WHITE)
+    }
+
     /** Trim [text] with an ellipsis so it fits within [maxWidth] pixels. Returns
      *  the original when it already fits. Used to stop list cells overlapping. */
     fun fit(font: Font, text: String, maxWidth: Int): String {

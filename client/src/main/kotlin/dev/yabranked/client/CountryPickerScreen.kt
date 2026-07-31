@@ -4,6 +4,7 @@ import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.EditBox
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -14,7 +15,7 @@ import net.minecraft.network.chat.Component
  */
 class CountryPickerScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Set Country")) {
+) : ScaledScreen(Component.literal("Set Country")) {
 
     private var search: EditBox? = null
     private var scroll = 0
@@ -32,7 +33,7 @@ class CountryPickerScreen(
 
     private val opened = FirstInit()
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         val left = centerX - WIDTH / 2
 
@@ -75,12 +76,12 @@ class CountryPickerScreen(
         }
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
@@ -144,8 +145,8 @@ class CountryPickerScreen(
         g.text(font, label, x + flagW + 8, y + (h - 8) / 2, if (selected) Ui.ACCENT else Ui.WHITE)
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
-        if (super.mouseClicked(event, doubleClick)) return true
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (super.onMouseClicked(event, doubled)) return true
         if (event.button() != 0) return false
         val list = matches()
         if (list.isEmpty()) return false
@@ -174,7 +175,7 @@ class CountryPickerScreen(
         return false
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
         val before = scroll
         if (vAmount > 0) scroll = (scroll - 1).coerceAtLeast(0) else if (vAmount < 0) scroll += 1
         if (scroll != before) Sfx.tick()

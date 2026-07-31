@@ -5,6 +5,7 @@ import dev.yabranked.client.ui.RankedButton
 import dev.yabranked.client.ui.Ui
 import dev.yabranked.proto.PartyInviteView
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -25,7 +26,7 @@ import net.minecraft.network.chat.Component
 class PartyInviteScreen(
     private val parent: Screen?,
     private val invite: PartyInviteView,
-) : Screen(Component.literal("Party invite from ${invite.from.name}")) {
+) : ScaledScreen(Component.literal("Party invite from ${invite.from.name}")) {
 
     private var openedAt = 0L
     private var answered = false
@@ -35,7 +36,7 @@ class PartyInviteScreen(
         return ((invite.expiresAt - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
     }
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         val y = height / 2 + 30
 
@@ -93,12 +94,12 @@ class PartyInviteScreen(
 
     override fun isPauseScreen(): Boolean = false
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
         val panelWidth = 240

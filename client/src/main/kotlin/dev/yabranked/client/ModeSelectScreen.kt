@@ -5,6 +5,7 @@ import dev.yabranked.client.ui.Ui
 import dev.yabranked.proto.MatchCategory
 import dev.yabranked.proto.MatchFormat
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
@@ -26,7 +27,7 @@ import org.lwjgl.glfw.GLFW
  */
 class ModeSelectScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Choose a mode")) {
+) : ScaledScreen(Component.literal("Choose a mode")) {
 
     private data class Section(val title: String, val subtitle: String, val formats: List<MatchFormat>)
 
@@ -77,7 +78,7 @@ class ModeSelectScreen(
     private val listTop get() = 44
     private val listBottom get() = height - 34
 
-    override fun init() {
+    override fun layout() {
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 98, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
         )
@@ -130,12 +131,12 @@ class ModeSelectScreen(
 
     private fun maxScroll(): Int = (contentHeight - (listBottom - listTop)).coerceAtLeast(0)
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, dx: Double, dy: Double): Boolean {
-        scroll = (scroll - (dy * SCROLL_STEP).toInt()).coerceIn(0, maxScroll())
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
+        scroll = (scroll - (vAmount * SCROLL_STEP).toInt()).coerceIn(0, maxScroll())
         return true
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         // The click that opened this screen can be followed immediately by a
         // second one from the same press-and-hold, at a cursor position chosen
         // for the *previous* screen's button — which lands on whatever card
@@ -147,7 +148,7 @@ class ModeSelectScreen(
         // the viewport but their rectangles are not, so a card scrolled past the
         // bottom edge still answered clicks — and since this runs before
         // super.mouseClicked, it swallowed presses of Back and Choose.
-        if (event.y() < listTop || event.y() >= listBottom) return super.mouseClicked(event, doubled)
+        if (event.y() < listTop || event.y() >= listBottom) return super.onMouseClicked(event, doubled)
 
         var hit: MatchFormat? = null
         eachCard { format, x, y, w, h ->
@@ -166,7 +167,7 @@ class ModeSelectScreen(
             }
             return true
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
     override fun keyPressed(event: KeyEvent): Boolean {
@@ -206,12 +207,12 @@ class ModeSelectScreen(
 
     // --- rendering ---
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
         Ui.header(g, centerX - 110, 8, 220, 24)

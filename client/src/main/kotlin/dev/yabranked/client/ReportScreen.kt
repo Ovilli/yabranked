@@ -3,6 +3,7 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -23,7 +24,7 @@ class ReportScreen(
      * otherwise, where it picks one opponent out of a team.
      */
     private val opponentUuid: String? = null,
-) : Screen(Component.literal("Report Player")) {
+) : ScaledScreen(Component.literal("Report Player")) {
 
     private var submitting = false
     private val buttons = mutableListOf<RankedButton>()
@@ -31,7 +32,7 @@ class ReportScreen(
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
 
-    override fun init() {
+    override fun layout() {
         buttons.clear()
         val centerX = width / 2
 
@@ -75,12 +76,12 @@ class ReportScreen(
         }
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
         val top = height / 2 - (REASONS.size + 1) * ROW / 2
 

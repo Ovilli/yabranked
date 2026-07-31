@@ -3,6 +3,7 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -14,7 +15,7 @@ import net.minecraft.network.chat.Component
  */
 class BackgroundPickerScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Card Background")) {
+) : ScaledScreen(Component.literal("Card Background")) {
 
     private var saving = false
     private var status: String? = null
@@ -22,7 +23,7 @@ class BackgroundPickerScreen(
 
     private val opened = FirstInit()
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         addRenderableWidget(
             RankedButton(centerX - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
@@ -51,12 +52,12 @@ class BackgroundPickerScreen(
         }
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
@@ -98,8 +99,8 @@ class BackgroundPickerScreen(
         }
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
-        if (super.mouseClicked(event, doubleClick)) return true
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (super.onMouseClicked(event, doubled)) return true
         if (event.button() != 0) return false
         val left = width / 2 - GRID_W / 2
         for ((i, id) in Backgrounds.ids.withIndex()) {

@@ -3,9 +3,9 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
-import net.minecraft.client.gui.components.Tooltip
 import net.minecraft.client.gui.narration.NarratedElementType
 import net.minecraft.client.gui.narration.NarrationElementOutput
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -16,7 +16,7 @@ import net.minecraft.network.chat.Component
 class ForfeitConfirmScreen(
     private val parent: Screen?,
     private val opponentName: String,
-) : Screen(Component.literal("Forfeit Match")) {
+) : ScaledScreen(Component.literal("Forfeit Match")) {
 
     /**
      * Whether conceding costs rating. Read off the live match rather than
@@ -29,14 +29,14 @@ class ForfeitConfirmScreen(
         get() = if (rated) "This counts as a loss and affects your rating."
         else "This counts as a loss. Casual match — your rating is unaffected."
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         addRenderableWidget(
             RankedButton(centerX - 100, height / 2 + 10, 200, 20, Component.literal("§cForfeit — $opponentName wins")) { forfeit() }
-        ).setTooltip(Tooltip.create(Component.literal("Concede the match. $stakes")))
+        ).tip("Concede the match. $stakes")
         addRenderableWidget(
             RankedButton(centerX - 100, height / 2 + 34, 200, 20, Component.literal("Keep playing")) { onClose() }
-        ).setTooltip(Tooltip.create(Component.literal("Close this and return to the match")))
+        ).tip("Close this and return to the match")
     }
 
     /**
@@ -85,12 +85,12 @@ class ForfeitConfirmScreen(
         onClose()
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
         g.centeredText(font, "§lFORFEIT MATCH?", centerX, height / 2 - 40, Ui.LOSS)
         g.centeredText(font, "§7$stakes", centerX, height / 2 - 22, Ui.TEXT_DIM)

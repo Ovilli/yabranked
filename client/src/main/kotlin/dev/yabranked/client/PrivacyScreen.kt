@@ -5,6 +5,7 @@ import dev.yabranked.client.ui.Ui
 import dev.yabranked.proto.PrivacySettings
 import dev.yabranked.proto.Visibility
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -19,7 +20,7 @@ import net.minecraft.network.chat.Component
  */
 class PrivacyScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Privacy")) {
+) : ScaledScreen(Component.literal("Privacy")) {
 
     private var settings: PrivacySettings = RankedState.profile?.privacy ?: PrivacySettings()
     private var saving = false
@@ -56,7 +57,7 @@ class PrivacyScreen(
             { it.showOnlineStatus }, { s, v -> s.copy(showOnlineStatus = v) }),
     )
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         // The visibility rows and the two social switches are one block. It sits
         // at TOP on a roomy window, but is lifted so its last row can never
@@ -163,12 +164,12 @@ class PrivacyScreen(
         }
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
 
         Ui.header(g, centerX - 110, 6, 220, 24)

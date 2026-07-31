@@ -9,6 +9,7 @@ import dev.yabranked.proto.PartyView
 import dev.yabranked.proto.PresenceState
 import dev.yabranked.proto.TeamAssignment
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -24,7 +25,7 @@ import net.minecraft.network.chat.Component
  */
 class PartyScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Party")) {
+) : ScaledScreen(Component.literal("Party")) {
 
     private var openedAt = 0L
 
@@ -52,7 +53,7 @@ class PartyScreen(
 
     private val listTop get() = 34
 
-    override fun init() {
+    override fun layout() {
         if (RankedState.isAuthenticated) RankedParty.connect()
         lastSignature = signature()
         val centerX = width / 2
@@ -201,7 +202,7 @@ class PartyScreen(
 
     // --- interaction ---
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         // Expanded-row actions sit on top of the row that opened them, so they
         // are tested first or the click would just collapse the row.
         for (hit in actionHits) {
@@ -221,7 +222,7 @@ class PartyScreen(
                 return true
             }
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
     private fun onMemberClicked(member: PartyMember) {
@@ -244,12 +245,12 @@ class PartyScreen(
 
     // --- rendering ---
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         // Both hit lists are rebuilt every frame from what was actually drawn,
         // so a row the server removed cannot be clicked one frame later.
         memberHits.clear()

@@ -6,6 +6,7 @@ import dev.yabranked.client.ui.Ui
 import dev.yabranked.proto.LeaderboardCategory
 import dev.yabranked.proto.LeaderboardResponse
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -24,7 +25,7 @@ import net.minecraft.network.chat.Component
  */
 class ModeLeaderboardScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Leaderboards")) {
+) : ScaledScreen(Component.literal("Leaderboards")) {
 
     private var categories: Loadable<List<LeaderboardCategory>> = Loadable.Loading
     private var board: Loadable<LeaderboardResponse> = Loadable.Loading
@@ -38,7 +39,7 @@ class ModeLeaderboardScreen(
     private val listTop get() = 54
     private val listBottom get() = height - 56
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         addRenderableWidget(
             RankedButton(centerX - 100, height - 52, 24, 20, Component.literal("◀")) { step(-1) }
@@ -89,15 +90,15 @@ class ModeLeaderboardScreen(
         }
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, dx: Double, dy: Double): Boolean {
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
         val rows = board.valueOrNull?.rows?.size ?: 0
         val visible = (listBottom - listTop) / ROW
-        scroll = (scroll - dy.toInt()).coerceIn(0, (rows - visible).coerceAtLeast(0))
+        scroll = (scroll - vAmount.toInt()).coerceIn(0, (rows - visible).coerceAtLeast(0))
         return true
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
-        val rows = board.valueOrNull?.rows ?: return super.mouseClicked(event, doubled)
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        val rows = board.valueOrNull?.rows ?: return super.onMouseClicked(event, doubled)
         if (event.y() >= listTop && event.y() < listBottom) {
             val row = rows.getOrNull(((event.y().toInt() - listTop) / ROW) + scroll)
             if (row != null) {
@@ -106,15 +107,15 @@ class ModeLeaderboardScreen(
                 return true
             }
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
         val category = categories.valueOrNull?.getOrNull(index)

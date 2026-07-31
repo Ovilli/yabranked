@@ -5,6 +5,7 @@ import dev.yabranked.client.Sfx
 import dev.yabranked.client.ui.RankedButton
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -27,7 +28,7 @@ import java.time.format.DateTimeFormatter
  * actionable: the cache is the player's disk, and this is where they can reclaim
  * it.
  */
-class ReplayLibraryScreen(private val parent: Screen) : Screen(Component.literal("Replays")) {
+class ReplayLibraryScreen(private val parent: Screen) : ScaledScreen(Component.literal("Replays")) {
 
     private var rows: List<ReplayCache.Cached> = emptyList()
     private var scroll = 0
@@ -38,7 +39,7 @@ class ReplayLibraryScreen(private val parent: Screen) : Screen(Component.literal
 
     private val hits = mutableListOf<Hit>()
 
-    override fun init() {
+    override fun layout() {
         rows = ReplayViewer.cache.cached()
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
@@ -48,12 +49,12 @@ class ReplayLibraryScreen(private val parent: Screen) : Screen(Component.literal
     private val listTop get() = 58
     private val listBottom get() = height - 34
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         hits.clear()
         val centerX = width / 2
 
@@ -177,7 +178,7 @@ class ReplayLibraryScreen(private val parent: Screen) : Screen(Component.literal
         return if (names.size >= 2) "${names[0]} vs ${names[1]}" else entry.meta.matchId
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (event.y() >= listTop && event.y() < listBottom) {
             for (hit in hits) {
                 if (event.x() >= hit.x && event.x() < hit.x + hit.w &&
@@ -189,12 +190,12 @@ class ReplayLibraryScreen(private val parent: Screen) : Screen(Component.literal
                 }
             }
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, dx: Double, dy: Double): Boolean {
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
         val maxScroll = (rows.size * ROW - (listBottom - listTop)).coerceAtLeast(0)
-        scroll = (scroll - (dy * 12).toInt()).coerceIn(0, maxScroll)
+        scroll = (scroll - (vAmount * 12).toInt()).coerceIn(0, maxScroll)
         return true
     }
 

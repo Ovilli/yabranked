@@ -7,13 +7,14 @@ import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 
 class RankedScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("YAB Ranked")) {
+) : ScaledScreen(Component.literal("YAB Ranked")) {
 
     private var queueButton: RankedButton? = null
     private var pickerButton: RankedButton? = null
@@ -48,7 +49,7 @@ class RankedScreen(
         return h
     }
 
-    override fun init() {
+    override fun layout() {
         RankedState.onRankedScreen = true
         // Invites and friend requests are server pushes, so the socket has
         // to be open before one arrives — not opened in reaction to one.
@@ -284,12 +285,12 @@ class RankedScreen(
     // --- rendering ---
 
     /** Backdrop draws in the background pass so the buttons stay on top of it. */
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
         Ui.header(g, centerX - 110, 10, 220, 30)
@@ -335,7 +336,7 @@ class RankedScreen(
         }
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (RankedState.isAuthenticated) {
             val party = RankedState.party
             val slot = PartyBox.slotAt(party, PARTY_BOX_X, PARTY_BOX_Y, event.x().toInt(), event.y().toInt())
@@ -352,7 +353,7 @@ class RankedScreen(
                 return true
             }
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
     private fun drawSignedOutCard(g: GuiGraphicsExtractor, centerX: Int) {
@@ -526,13 +527,8 @@ class RankedScreen(
 
     /** Small boxed tooltip near the cursor, clamped to the screen. Drawn in the
      *  content pass so it sits above the buttons. */
-    private fun drawTooltip(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, text: String) {
-        val w = font.width(text)
-        val x = (mouseX + 10).coerceAtMost(width - w - 6)
-        val y = (mouseY - 14).coerceAtLeast(2)
-        Ui.panel(g, x - 3, y - 3, w + 6, 14)
-        g.text(font, text, x, y, Ui.WHITE)
-    }
+    private fun drawTooltip(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, text: String) =
+        Ui.tooltip(g, font, mouseX, mouseY, text, width)
 
     override fun onClose() {
         // leaving the screen does not leave the queue; the socket keeps running

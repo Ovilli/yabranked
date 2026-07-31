@@ -35,6 +35,17 @@ class RankedButton(
     private val onPress: () -> Unit,
 ) : AbstractWidget(x, y, width, height, label) {
 
+    /**
+     * Hover label, drawn by [ScaledScreen] rather than by the vanilla tooltip
+     * holder — see [Ui.tooltip] for why. Buttons on a vanilla screen (the pause
+     * screen's forfeit button) still use `setTooltip`, since nothing there is
+     * looking at this.
+     */
+    var hoverTip: String? = null
+
+    /** Sets [hoverTip] and returns the button, for use at the add site. */
+    fun tip(text: String): RankedButton = apply { hoverTip = text }
+
     override fun onClick(event: MouseButtonEvent, doubled: Boolean) {
         Minecraft.getInstance().soundManager
             .play(SimpleSoundInstance.forUI(SoundEvents.UI_BUTTON_CLICK.value(), 1.0f))

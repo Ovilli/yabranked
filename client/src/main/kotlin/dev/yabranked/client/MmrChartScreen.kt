@@ -3,7 +3,7 @@ package dev.yabranked.client
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
-import net.minecraft.client.gui.components.Tooltip
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.client.input.MouseButtonEvent
@@ -26,7 +26,7 @@ class MmrChartScreen(
     private val parent: Screen?,
     private val points: List<Ui.ChartPoint>,
     private val subtitle: String,
-) : Screen(Component.literal("MMR History")) {
+) : ScaledScreen(Component.literal("MMR History")) {
 
     private var openedAt = 0L
 
@@ -48,7 +48,7 @@ class MmrChartScreen(
     private var plotW = 0
     private var plotH = 0
 
-    override fun init() {
+    override fun layout() {
         addRenderableWidget(
             RankedButton(width / 2 - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
         )
@@ -70,7 +70,7 @@ class MmrChartScreen(
         chartButton(width / 2 - 34, row, ">", "Pan right") { pan(panStep()) }
         addRenderableWidget(
             RankedButton(width / 2 - 10, row, 110, 18, Component.literal("Reset"), Ui.ICON_REFRESH) { resetZoom() }
-        ).setTooltip(Tooltip.create(Component.literal("Show the whole series again")))
+        ).tip("Show the whole series again")
         opened.once { Sfx.open() }
         clamp()
     }
@@ -79,7 +79,7 @@ class MmrChartScreen(
     private fun chartButton(x: Int, y: Int, glyph: String, label: String, action: () -> Unit) {
         addRenderableWidget(
             RankedButton(x, y, 20, 18, Component.literal(glyph), onPress = action)
-        ).setTooltip(Tooltip.create(Component.literal(label)))
+        ).tip(label)
     }
 
     /** Points one pan press moves: a quarter window, at least one point. */
@@ -148,7 +148,7 @@ class MmrChartScreen(
      * under the mouse is the one the player is looking at, so it is the one that
      * has to stay put as the window tightens.
      */
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, dx: Double, dy: Double): Boolean {
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
         if (points.size < 2) return true
 
         // Accepted anywhere on the screen, not only over the plot rectangle.
@@ -159,7 +159,7 @@ class MmrChartScreen(
         //
         // Some wheels and most trackpads report the gesture on the horizontal
         // axis, so both are read; the vertical one wins when both are present.
-        val amount = if (dy != 0.0) dy else dx
+        val amount = if (vAmount != 0.0) vAmount else hAmount
         if (amount == 0.0) return true
 
         // Anchor on the cursor when it is over the plot, on the middle of the
@@ -186,8 +186,8 @@ class MmrChartScreen(
         return true
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
-        if (super.mouseClicked(event, doubled)) return true
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (super.onMouseClicked(event, doubled)) return true
         if (event.button() == 0 && inPlot(event.x(), event.y())) {
             dragFromX = event.x()
             dragFromOffset = offset
@@ -196,8 +196,8 @@ class MmrChartScreen(
         return false
     }
 
-    override fun mouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
-        if (dragFromX < 0 || plotW <= 0 || zoom >= points.size) return super.mouseDragged(event, dragX, dragY)
+    override fun onMouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        if (dragFromX < 0 || plotW <= 0 || zoom >= points.size) return super.onMouseDragged(event, dragX, dragY)
         // One plot-width of drag pans exactly one window, so the chart tracks the
         // cursor instead of moving at some fixed pixels-per-point rate that feels
         // wrong at every zoom level but one.
@@ -207,9 +207,9 @@ class MmrChartScreen(
         return true
     }
 
-    override fun mouseReleased(event: MouseButtonEvent): Boolean {
+    override fun onMouseReleased(event: MouseButtonEvent): Boolean {
         dragFromX = -1.0
-        return super.mouseReleased(event)
+        return super.onMouseReleased(event)
     }
 
     override fun keyPressed(event: KeyEvent): Boolean {
@@ -228,12 +228,12 @@ class MmrChartScreen(
         return super.keyPressed(event)
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2

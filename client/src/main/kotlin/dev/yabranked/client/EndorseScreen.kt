@@ -6,6 +6,7 @@ import dev.yabranked.client.ui.Ui
 import dev.yabranked.proto.EndorsementCategory
 import dev.yabranked.proto.EndorsementPrompt
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -21,7 +22,7 @@ import net.minecraft.network.chat.Component
 class EndorseScreen(
     private val parent: Screen?,
     private val matchId: String,
-) : Screen(Component.literal("Endorse teammates")) {
+) : ScaledScreen(Component.literal("Endorse teammates")) {
 
     private var prompt: Loadable<EndorsementPrompt> = Loadable.Loading
     private val chosen = linkedSetOf<String>()
@@ -36,7 +37,7 @@ class EndorseScreen(
      *  so a long roster can neither be drawn on nor click through them. */
     private val listBottom get() = height - 72
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         addRenderableWidget(
             RankedButton(centerX - 120, height - 52, 240, 20, Component.literal("Reason: ${category.displayName}")) {
@@ -94,12 +95,12 @@ class EndorseScreen(
         }
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
-        val teammates = prompt.valueOrNull?.teammates ?: return super.mouseClicked(event, doubled)
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        val teammates = prompt.valueOrNull?.teammates ?: return super.onMouseClicked(event, doubled)
         // Bounded at both ends: the row rectangles are unclipped, so without a
         // bottom edge a long roster answered clicks aimed at the Reason/Skip/
         // Endorse buttons — and this runs before super.mouseClicked.
-        if (event.y() < listTop || event.y() >= listBottom) return super.mouseClicked(event, doubled)
+        if (event.y() < listTop || event.y() >= listBottom) return super.onMouseClicked(event, doubled)
         val index = ((event.y().toInt() - listTop) / ROW)
         val target = teammates.getOrNull(index)
         if (target != null) {
@@ -108,15 +109,15 @@ class EndorseScreen(
             rebuildWidgets()
             return true
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
 
         Ui.header(g, centerX - 110, 8, 220, 34)

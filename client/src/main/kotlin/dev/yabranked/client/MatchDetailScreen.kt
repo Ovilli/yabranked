@@ -6,6 +6,7 @@ import dev.yabranked.client.ui.PlayerHeads
 import dev.yabranked.client.ui.Ui
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import dev.yabranked.client.ui.RankedButton
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
@@ -18,13 +19,13 @@ import net.minecraft.network.chat.Component
 class MatchDetailScreen(
     private val parent: Screen?,
     private val entry: MatchHistoryEntry,
-) : Screen(Component.literal("Match Details")) {
+) : ScaledScreen(Component.literal("Match Details")) {
 
     private var openedAt = 0L
 
     private val opened = FirstInit()
 
-    override fun init() {
+    override fun layout() {
         val centerX = width / 2
         addRenderableWidget(
             RankedButton(centerX - 122, height - 28, 120, 20, Component.literal("Opponent"), Ui.ICON_LEADERBOARD) {
@@ -49,12 +50,12 @@ class MatchDetailScreen(
         opened.once { Sfx.open() }
     }
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2

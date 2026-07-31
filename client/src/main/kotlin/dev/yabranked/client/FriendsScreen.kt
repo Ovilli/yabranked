@@ -9,6 +9,7 @@ import dev.yabranked.proto.PresenceState
 import dev.yabranked.proto.RecentPlayer
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.EditBox
+import dev.yabranked.client.ui.ScaledScreen
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
@@ -23,7 +24,7 @@ import org.slf4j.LoggerFactory
  */
 class FriendsScreen(
     private val parent: Screen?,
-) : Screen(Component.literal("Friends")) {
+) : ScaledScreen(Component.literal("Friends")) {
 
     private enum class Tab(val title: String) { FRIENDS("Friends"), REQUESTS("Requests"), ADD("Add") }
 
@@ -67,7 +68,7 @@ class FriendsScreen(
     private val listTop get() = if (tab == Tab.ADD) 80 else 58
     private val listBottom get() = height - 34
 
-    override fun init() {
+    override fun layout() {
         // Inviting is the point of this screen and it travels over the
         // party socket, so make sure there is one.
         if (RankedState.isAuthenticated) RankedParty.connect()
@@ -108,11 +109,7 @@ class FriendsScreen(
                 centerX + (Tab.entries.size * 66) / 2 + 4, 34, 20, 18,
                 Component.literal("Refresh"), Ui.ICON_REFRESH, iconOnly = true,
             ) { manualRefresh() }
-        ).setTooltip(
-            net.minecraft.client.gui.components.Tooltip.create(
-                Component.literal("Check for new friend requests")
-            )
-        )
+        ).tip("Check for new friend requests")
 
         addRenderableWidget(
             RankedButton(centerX - 100, height - 28, 200, 20, Component.literal("Back"), Ui.ICON_BACK) { onClose() }
@@ -254,15 +251,15 @@ class FriendsScreen(
         Tab.ADD -> recent.valueOrNull?.size ?: 0
     }
 
-    override fun mouseScrolled(mouseX: Double, mouseY: Double, dx: Double, dy: Double): Boolean {
+    override fun onMouseScrolled(mouseX: Double, mouseY: Double, hAmount: Double, vAmount: Double): Boolean {
         // Clamped at both ends: with only a floor the wheel scrolled the list
         // clean off the top of the viewport and left the tab looking empty.
         val maxScroll = (rowCount() * ROW - (listBottom - listTop)).coerceAtLeast(0)
-        scroll = (scroll - (dy * ROW).toInt()).coerceIn(0, maxScroll)
+        scroll = (scroll - (vAmount * ROW).toInt()).coerceIn(0, maxScroll)
         return true
     }
 
-    override fun mouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+    override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (event.y() >= listTop && event.y() < listBottom) {
             for (hit in hits) {
                 if (event.x() >= hit.x && event.x() < hit.x + hit.w &&
@@ -279,17 +276,17 @@ class FriendsScreen(
             confirmRemove = null
             return true
         }
-        return super.mouseClicked(event, doubled)
+        return super.onMouseClicked(event, doubled)
     }
 
     // --- rendering ---
 
-    override fun extractBackground(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+    override fun drawBackdrop(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         Ui.drawBackground(g, width, height, blurred = true)
     }
 
-    override fun extractRenderState(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
-        super.extractRenderState(g, mouseX, mouseY, partialTick)
+    override fun drawContent(g: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
+        super.drawContent(g, mouseX, mouseY, partialTick)
         hits.clear()
 
         val centerX = width / 2
