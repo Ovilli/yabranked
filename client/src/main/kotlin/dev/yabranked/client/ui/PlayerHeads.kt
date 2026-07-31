@@ -1,6 +1,6 @@
 package dev.yabranked.client.ui
 
-import com.mojang.authlib.GameProfile
+import net.minecraft.util.Util
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.resources.DefaultPlayerSkin
@@ -8,6 +8,7 @@ import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.resources.Identifier
 import net.minecraft.world.entity.player.PlayerSkin
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -30,19 +31,43 @@ object PlayerHeads {
     /**
      * Resolved skin, or the vanilla default (Steve/Alex, chosen from the UUID)
      * while the lookup is in flight or when the account has no custom skin.
+     *
+     * **The profile has to be fetched before the skin manager is asked.**
+     * `SkinManager.get` reads the `textures` property off the profile it is
+     * handed and, finding none, resolves to `MinecraftProfileTextures.EMPTY` —
+     * it never goes to Mojang itself. Handing it a bare `GameProfile(uuid, name)`
+     * therefore always produced the default skin, which is why a signed-in
+     * player's own face on their own profile card was Steve.
      */
-    private fun skinFor(uuid: UUID, name: String): PlayerSkin {
+    private fun skinFor(uuid: UUID): PlayerSkin {
         cache[uuid]?.let { return it }
 
         if (pending.add(uuid)) {
             val minecraft = Minecraft.getInstance()
-            minecraft.skinManager.get(GameProfile(uuid, name))
-                .thenAccept { skin ->
-                    skin.ifPresent { cache[uuid] = it }
-                    pending.remove(uuid)
-                }
+            val sessionService = minecraft.services().sessionService()
+            CompletableFuture
+                .supplyAsync({ sessionService.fetchProfile(uuid, true)?.profile }, Util.backgroundExecutor())
+                // back on the render thread: the skin manager registers textures
+                // with the texture manager, which is not thread-safe
+                .thenAcceptAsync({ profile ->
+                    if (profile == null) {
+                        // offline/dev accounts have no Mojang profile at all
+                        pending.remove(uuid)
+                        return@thenAcceptAsync
+                    }
+                    minecraft.skinManager.get(profile)
+                        .thenAccept { skin ->
+                            skin.ifPresent { cache[uuid] = it }
+                            pending.remove(uuid)
+                        }
+                        .exceptionally {
+                            pending.remove(uuid)
+                            null
+                        }
+                }, minecraft)
                 .exceptionally {
-                    // offline/dev accounts have no Mojang skin; keep the default
+                    // a throttled or unreachable session service; keep the
+                    // default and let the next screen that needs it try again
                     pending.remove(uuid)
                     null
                 }
@@ -65,7 +90,7 @@ object PlayerHeads {
             return
         }
 
-        val texture: Identifier = skinFor(parsed, name).body().texturePath()
+        val texture: Identifier = skinFor(parsed).body().texturePath()
 
         // base face layer
         g.blit(
