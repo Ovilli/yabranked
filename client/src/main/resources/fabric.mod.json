@@ -16,6 +16,12 @@
         "adapter": "kotlin",
         "value": "dev.yabranked.client.YabRankedClient"
       }
+    ],
+    "modmenu": [
+      {
+        "adapter": "kotlin",
+        "value": "dev.yabranked.client.compat.ModMenuIntegration"
+      }
     ]
   },
   "depends": {

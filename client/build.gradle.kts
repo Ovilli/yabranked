@@ -12,6 +12,8 @@ kotlin {
 
 repositories {
     mavenCentral()
+    // Mod Menu, for the config-screen entrypoint only — compile-only, see below.
+    maven("https://maven.terraformersmc.com/releases") { name = "Terraformers" }
 }
 
 // Where `runClient` points. Overridable from the command line for pointing a dev
@@ -66,6 +68,13 @@ dependencies {
     // shared wire model — compile against it and bundle its classes (see above)
     implementation(project(":proto"))
     bundledProto(project(":proto"))
+
+    // Mod Menu is an optional integration and must stay compile-only: the mod
+    // has to load with it absent. Nothing references ModMenuIntegration except
+    // the "modmenu" entrypoint, which only Mod Menu itself ever reads, so the
+    // class is never loaded when Mod Menu is not installed. Not `modCompileOnly`
+    // — Minecraft 26.x is unobfuscated, so there is nothing to remap.
+    compileOnly("com.terraformersmc:modmenu:20.0.1")
 
     testImplementation(kotlin("test"))
 }
