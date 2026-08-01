@@ -6,7 +6,7 @@
 set -eu
 
 YAB_REPO="${YAB_REPO:-../bingo}"
-FABRIC_API_VERSION="${FABRIC_API_VERSION:-0.152.1+26.2}"
+FABRIC_API_VERSION="${FABRIC_API_VERSION:-0.156.0+26.2}"
 MODS_DIR="$(dirname "$0")/mods"
 
 mkdir -p "$MODS_DIR"
