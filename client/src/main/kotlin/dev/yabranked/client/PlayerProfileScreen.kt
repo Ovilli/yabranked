@@ -328,7 +328,11 @@ class PlayerProfileScreen(
 
         Ui.panel(g, left, CARD_TOP, CARD_WIDTH, CARD_HEIGHT)
         Ui.drawUserBackground(g, left + 3, CARD_TOP + 3, CARD_WIDTH - 6, CARD_HEIGHT - 6, p.background)
-        Ui.accentBar(g, left, CARD_TOP, CARD_HEIGHT, tierColor)
+        // No tier accent bar down the left edge. It reads as a stray line rather
+        // than as a tier: an unranked player's is TEXT_DIM, i.e. a grey stripe on
+        // a grey panel, and the badge and the tier text already say the tier in
+        // the same colour. The bar stays where its colour carries something the
+        // card does not — win/loss on a history row, ranked/casual on a mode.
 
         val padLeft = left + 10
         val padRight = right - 10

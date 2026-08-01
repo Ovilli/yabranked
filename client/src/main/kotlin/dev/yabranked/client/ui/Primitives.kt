@@ -159,11 +159,83 @@ open class UiPrimitives : UiPalette() {
     /**
      * A small panel with centred text, for empty / error / loading states so
      * they read as intentional cards rather than text floating on the backdrop.
+     *
+     * The text is wrapped to the card and the card grows to hold it. It used to
+     * be drawn as one centred line, which meant any message wider than [width]
+     * — the replay library's empty state, or a backend error of unknown length
+     * — was painted straight through both borders and out onto the backdrop.
+     * [height] is therefore a minimum rather than the size.
      */
     fun messageCard(g: GuiGraphicsExtractor, font: Font, centerX: Int, top: Int, text: String, width: Int = 220, height: Int = 38) {
+        val lines = wrap(font, text, width - 16)
+        val drawnHeight = maxOf(height, lines.size * LINE + 16)
         val left = centerX - width / 2
-        panel(g, left, top, width, height)
-        g.centeredText(font, text, centerX, top + height / 2 - 4, TEXT_DIM)
+        panel(g, left, top, width, drawnHeight)
+        var y = top + drawnHeight / 2 - lines.size * LINE / 2
+        for (line in lines) {
+            g.centeredText(font, line, centerX, y, TEXT_DIM)
+            y += LINE
+        }
+    }
+
+    /** Line height used when a helper lays out more than one line of text. */
+    private val LINE = 11
+
+    /**
+     * Break [text] into lines no wider than [maxWidth], on spaces.
+     *
+     * Formatting codes are re-applied at the start of every line: a `§7` opening
+     * the message applies until the renderer meets a newline, and each line here
+     * is a separate draw call. A word too long to fit on its own is ellipsised by
+     * [fit] rather than split mid-word.
+     */
+    fun wrap(font: Font, text: String, maxWidth: Int): List<String> =
+        wrap(text, maxWidth, measure = { font.width(it) }, ellipsise = { s, w -> fit(font, s, w) })
+
+    /**
+     * [wrap] over a measuring function rather than a [Font], so the line-breaking
+     * itself can be tested without a running game.
+     */
+    fun wrap(
+        text: String,
+        maxWidth: Int,
+        measure: (String) -> Int,
+        ellipsise: (String, Int) -> String = { s, _ -> s },
+    ): List<String> {
+        if (maxWidth <= 0) return listOf(text)
+        if (measure(text) <= maxWidth) return listOf(text)
+
+        val lines = mutableListOf<String>()
+        val line = StringBuilder()
+        var active = ""
+
+        fun flush() {
+            if (line.isNotEmpty()) lines += line.toString()
+            line.setLength(0)
+        }
+
+        for (word in text.split(' ')) {
+            val candidate = if (line.isEmpty()) active + word else "$line $word"
+            if (measure(candidate) > maxWidth && line.isNotEmpty()) {
+                flush()
+                line.append(active).append(word)
+            } else {
+                line.setLength(0)
+                line.append(candidate)
+            }
+            // Codes carry across the break, so track whatever this word opened.
+            var i = word.indexOf('§')
+            while (i >= 0 && i + 1 < word.length) {
+                active = if (word[i + 1] == 'r') "" else active + word.substring(i, i + 2)
+                i = word.indexOf('§', i + 2)
+            }
+            if (measure(line.toString()) > maxWidth) {
+                lines += ellipsise(line.toString(), maxWidth)
+                line.setLength(0)
+            }
+        }
+        flush()
+        return lines
     }
 
     /**

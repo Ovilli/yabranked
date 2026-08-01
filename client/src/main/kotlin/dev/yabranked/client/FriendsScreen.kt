@@ -43,8 +43,17 @@ class FriendsScreen(
     /** [RankedState.socialRevision] the current list was loaded at. */
     private var loadedRevision = RankedState.socialRevision
 
-    /** Wall-clock of the last completed load, shown next to the Refresh button. */
-    private var refreshedAt = 0L
+    /**
+     * Whether the load in flight was asked for by the player.
+     *
+     * A refresh owes an answer, but the answer used to be a line of text under
+     * the title, and the title's plate is only 24px tall — "updated just now"
+     * landed on top of it. A notice says the same thing where notices already
+     * go, and leaves when it is done. Only manual refreshes raise one: the
+     * automatic poll runs every few seconds and would otherwise be a permanent
+     * column in the corner.
+     */
+    private var announceRefresh = false
 
     /**
      * Clickable rectangles drawn this frame, innermost first.
@@ -124,6 +133,7 @@ class FriendsScreen(
             return
         }
         Sfx.select()
+        announceRefresh = true
         load()
     }
 
@@ -157,7 +167,6 @@ class FriendsScreen(
             val people = backend.fetchRecentPlayers()
             minecraft.execute {
                 refreshing = false
-                refreshedAt = System.currentTimeMillis()
                 loadedRevision = revision
                 // A failed refresh leaves the list that is already on screen
                 // alone; replacing it with an error would throw away good rows
@@ -172,6 +181,19 @@ class FriendsScreen(
                 // between refreshes; this is the authoritative count.
                 RankedState.friendRequests =
                     friends.valueOrNull?.incoming?.size ?: RankedState.friendRequests
+                if (announceRefresh) {
+                    announceRefresh = false
+                    if (list is BackendClient.Fetch.Ok) {
+                        val pending = friends.valueOrNull?.incoming?.size ?: 0
+                        RankedNotice.info(
+                            if (pending > 0) "$pending pending request${if (pending == 1) "" else "s"}"
+                            else "No new requests",
+                            title = "Friends",
+                        )
+                    } else {
+                        RankedNotice.error("Could not refresh — try again", title = "Friends")
+                    }
+                }
                 rebuildWidgets()
             }
         }
@@ -292,14 +314,6 @@ class FriendsScreen(
         val centerX = width / 2
         Ui.header(g, centerX - 110, 6, 220, 24)
         g.centeredText(font, "§lFRIENDS", centerX, 13, Ui.ACCENT)
-        // Says whether what is on screen is current, so a refresh that found
-        // nothing new is distinguishable from one that never ran.
-        val freshness = when {
-            refreshing -> "§8updating…"
-            refreshedAt == 0L -> ""
-            else -> "§8updated ${Ui.relativeTime(refreshedAt / 1000)}"
-        }
-        if (freshness.isNotEmpty()) g.centeredText(font, freshness, centerX, 24, Ui.TEXT_FAINT)
 
         val listWidth = (width - 60).coerceIn(200, 420)
         val left = (width - listWidth) / 2

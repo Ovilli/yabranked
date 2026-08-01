@@ -376,7 +376,7 @@ class RankedScreen(
         // Banner image behind the card (mcsr BannerCardWidget look). Inset so the
         // panel's nine-slice corners still frame it; the helper dims it for text.
         Ui.drawUserBackground(g, left + 3, CARD_TOP + 3, CARD_WIDTH - 6, CARD_HEIGHT - 6, profile.background)
-        Ui.accentBar(g, left, CARD_TOP, CARD_HEIGHT, tierColor)
+        // Deliberately no tier accent bar; see PlayerProfileScreen.drawCard.
 
         val padLeft = left + 10
         val padRight = right - 10

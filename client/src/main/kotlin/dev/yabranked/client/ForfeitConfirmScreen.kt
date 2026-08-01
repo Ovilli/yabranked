@@ -29,14 +29,52 @@ class ForfeitConfirmScreen(
         get() = if (rated) "This counts as a loss and affects your rating."
         else "This counts as a loss. Casual match — your rating is unaffected."
 
+    /**
+     * Ticks the Forfeit button stays dead after this screen opens.
+     *
+     * On the pause menu the button that opens this screen sits exactly where
+     * vanilla's "Disconnect" / "Save and Quit to Title" was, so it is reached by
+     * muscle memory — and a second click landing where the mouse already is
+     * conceded the match before the player had read a word of it. A ranked match
+     * is twenty minutes of someone's evening; a second of nothing happening is
+     * a cheap price for not throwing it away by reflex.
+     */
+    private val armAfter = 30
+
+    private var ticks = 0
+    private var forfeitButton: RankedButton? = null
+
+    /** Seconds still to wait, rounded up; 0 once the button is live. */
+    private val armingLeft: Int get() = ((armAfter - ticks) + 19) / 20
+
+    private val armed: Boolean get() = ticks >= armAfter
+
     override fun layout() {
         val centerX = width / 2
+        forfeitButton = addRenderableWidget(
+            RankedButton(centerX - 100, height / 2 + 10, 200, 20, forfeitLabel()) {
+                // Guarded as well as greyed: `active` stops the click, but a
+                // keyboard-activated widget must not find a different answer here.
+                if (armed) forfeit() else Sfx.tick()
+            }
+        ).also { it.active = armed }.tip("Concede the match. $stakes")
         addRenderableWidget(
-            RankedButton(centerX - 100, height / 2 + 10, 200, 20, Component.literal("§cForfeit — $opponentName wins")) { forfeit() }
-        ).tip("Concede the match. $stakes")
-        addRenderableWidget(
-            RankedButton(centerX - 100, height / 2 + 34, 200, 20, Component.literal("Keep playing")) { onClose() }
+            RankedButton(centerX - 100, height / 2 + 34, 200, 20, Component.literal("Keep playing"), Ui.ICON_BACK) { onClose() }
         ).tip("Close this and return to the match")
+    }
+
+    private fun forfeitLabel(): Component = Component.literal(
+        if (armed) "§cForfeit — $opponentName wins" else "§7Forfeit — ${armingLeft}s"
+    )
+
+    override fun tick() {
+        super.tick()
+        if (armed) return
+        ticks++
+        forfeitButton?.let {
+            it.message = forfeitLabel()
+            it.active = armed
+        }
     }
 
     /**
