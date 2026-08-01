@@ -71,6 +71,23 @@ data class BackendConfig(
     val replayS3SecretKey: String?,
     val replayS3Region: String,
     /**
+     * How long an unpinned recording is kept, and how much one player may pin.
+     *
+     * These used to be compile-time constants, which on a host with four
+     * gigabytes free meant the only way to fit the disk was a rebuild. A
+     * recording is the largest thing this service writes; the numbers that bound
+     * it belong wherever the rest of the deployment's numbers are.
+     */
+    val replayRetentionDays: Long?,
+    val replaySavedPerPlayer: Int?,
+    val replaySavedBytesPerPlayer: Long?,
+    val replayMaxRecordingBytes: Long?,
+    /**
+     * Directory finished match containers' logs are copied into before the
+     * container is destroyed, or null to keep discarding them.
+     */
+    val matchLogDir: String?,
+    /**
      * `localPort=publicHost:publicPort` pairs, comma separated, for hosts behind
      * a tunnel rather than a port forward.
      *
@@ -146,6 +163,11 @@ data class BackendConfig(
                 replayS3SecretKey = env.string("YABRANKED_REPLAY_S3_SECRET_KEY"),
                 // R2 ignores the region but the SDK insists on one.
                 replayS3Region = env.string("YABRANKED_REPLAY_S3_REGION") ?: "auto",
+                replayRetentionDays = env.positiveLong("YABRANKED_REPLAY_RETENTION_DAYS"),
+                replaySavedPerPlayer = env.positiveInt("YABRANKED_REPLAY_SAVED_PER_PLAYER"),
+                replaySavedBytesPerPlayer = env.byteSize("YABRANKED_REPLAY_SAVED_BYTES_PER_PLAYER"),
+                replayMaxRecordingBytes = env.byteSize("YABRANKED_REPLAY_MAX_RECORDING_BYTES"),
+                matchLogDir = env.string("YABRANKED_MATCH_LOG_DIR"),
                 portMap = parsePortMap(env.string("YABRANKED_PORT_MAP")),
             )
         }
@@ -211,6 +233,31 @@ data class BackendConfig(
             val raw = string(name) ?: return null
             return raw.toLongOrNull()?.takeIf { it > 0 }
                 ?: throw ConfigException("$name must be a positive number of seconds, got '$raw'")
+        }
+
+        private fun Env.positiveInt(name: String): Int? {
+            val raw = string(name) ?: return null
+            return raw.toIntOrNull()?.takeIf { it > 0 }
+                ?: throw ConfigException("$name must be a positive integer, got '$raw'")
+        }
+
+        /**
+         * A byte count, plain or with a k/m/g suffix — `2g` and `2147483648` are
+         * the same limit. Reuses [SIZE] so a size means the same thing here as it
+         * does for a Docker limit.
+         */
+        private fun Env.byteSize(name: String): Long? {
+            val raw = string(name) ?: return null
+            if (!SIZE.matches(raw)) {
+                throw ConfigException("$name must look like 512m / 2g / 1073741824, got '$raw'")
+            }
+            val digits = raw.dropLastWhile { !it.isDigit() }.toLong()
+            return when (raw.last().lowercaseChar()) {
+                'k' -> digits * 1024
+                'm' -> digits * 1024 * 1024
+                'g' -> digits * 1024 * 1024 * 1024
+                else -> digits
+            }
         }
 
         /** Docker byte sizes: a number with an optional b/k/m/g suffix. */

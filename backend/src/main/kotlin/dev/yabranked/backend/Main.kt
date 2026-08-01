@@ -183,6 +183,21 @@ fun main(args: Array<String>) {
         metrics = metrics,
     )
 
+    // An unset gate is not a neutral default. Backward compatibility rests on
+    // `ignoreUnknownKeys` and default values, and neither covers a new
+    // QueueServerMessage or PartyServerMessage subtype: an old jar meets an
+    // unknown `type` discriminator, fails to decode it, and shows the player
+    // some downstream symptom instead of "update the mod". The gate is what
+    // turns that into a 426 at sign-in, and it only works if it is set.
+    if (config.minClientVersion == null) {
+        log.warn(
+            "no YABRANKED_MIN_CLIENT_VERSION set — clients older than this backend fail in " +
+                "whatever way they happen to fail, rather than being told to update"
+        )
+    } else {
+        log.info("clients older than {} are refused at sign-in", config.minClientVersion)
+    }
+
     val verifier = if (config.fakeAuth) {
         log.warn("!! fake auth enabled — do not expose this instance publicly")
         FakeSessionVerifier()
@@ -226,6 +241,7 @@ fun main(args: Array<String>) {
                 noShowTimeoutSeconds = config.noShowTimeoutSeconds,
                 postgameSeconds = config.postgameSeconds,
                 portMap = config.portMap,
+                logDir = config.matchLogDir?.let { java.nio.file.Path.of(it) },
             ),
             runtime = DockerCliRuntime(),
             matchService = matchService,
@@ -255,8 +271,16 @@ fun main(args: Array<String>) {
     // top-ten player holds their rank by never queueing again.
     val decaySweep = DecaySweep(players, seasons, rating, transactions = transactions)
     // Recordings are large and every match makes one, so the default is that
-    // they expire; the store decides what a save or a report keeps alive.
-    val replayPolicy = dev.yabranked.backend.store.ReplayPolicy()
+    // they expire; the store decides what a save or a report keeps alive. The
+    // defaults assume a host with room — on a small disk every one of these is
+    // worth turning down, which is why they are settings and not constants.
+    val replayDefaults = dev.yabranked.backend.store.ReplayPolicy()
+    val replayPolicy = replayDefaults.copy(
+        retentionDays = config.replayRetentionDays ?: replayDefaults.retentionDays,
+        savedPerPlayer = config.replaySavedPerPlayer ?: replayDefaults.savedPerPlayer,
+        savedBytesPerPlayer = config.replaySavedBytesPerPlayer ?: replayDefaults.savedBytesPerPlayer,
+        maxRecordingBytes = config.replayMaxRecordingBytes ?: replayDefaults.maxRecordingBytes,
+    )
     // The packets themselves never go in the database; see ReplayBlobStores.kt.
     // No directory configured means recordings live for as long as the process
     // does, which is the same bargain the in-memory stores make.

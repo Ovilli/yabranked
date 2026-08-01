@@ -96,4 +96,36 @@ class BackendConfigTest {
         assertFailsWith<ConfigException> { config("YABRANKED_SEASON" to "0") }
         assertFailsWith<ConfigException> { config("YABRANKED_SEASON" to "latest") }
     }
+
+    @Test
+    fun `replay limits are unset by default so the policy keeps its own`() {
+        val c = config()
+        assertNull(c.replayRetentionDays)
+        assertNull(c.replaySavedPerPlayer)
+        assertNull(c.replaySavedBytesPerPlayer)
+        assertNull(c.replayMaxRecordingBytes)
+        assertNull(c.matchLogDir)
+    }
+
+    @Test
+    fun `replay sizes accept a suffix or plain bytes`() {
+        assertEquals(
+            512L * 1024 * 1024,
+            config("YABRANKED_REPLAY_SAVED_BYTES_PER_PLAYER" to "512m").replaySavedBytesPerPlayer,
+        )
+        assertEquals(
+            2L * 1024 * 1024 * 1024,
+            config("YABRANKED_REPLAY_SAVED_BYTES_PER_PLAYER" to "2g").replaySavedBytesPerPlayer,
+        )
+        assertEquals(
+            1024L,
+            config("YABRANKED_REPLAY_MAX_RECORDING_BYTES" to "1024").replayMaxRecordingBytes,
+        )
+        // A size that cannot be parsed is refused rather than silently ignored:
+        // a replay limit that quietly stayed at its default is how a small disk
+        // fills up while its operator believes it is capped.
+        assertFailsWith<ConfigException> { config("YABRANKED_REPLAY_MAX_RECORDING_BYTES" to "loads") }
+        assertFailsWith<ConfigException> { config("YABRANKED_REPLAY_RETENTION_DAYS" to "0") }
+        assertFailsWith<ConfigException> { config("YABRANKED_REPLAY_SAVED_PER_PLAYER" to "-1") }
+    }
 }

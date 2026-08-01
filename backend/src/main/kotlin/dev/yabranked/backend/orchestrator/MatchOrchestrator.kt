@@ -102,6 +102,27 @@ data class OrchestratorConfig(
      * players were left holding a match they could neither finish nor leave.
      */
     val livenessInterval: Duration = 30.seconds,
+    /**
+     * Directory each finished match's container log is copied into, or null to
+     * keep discarding them.
+     *
+     * Teardown is `docker rm -f`, which destroys the only copy of the one thing
+     * that can explain a match-level bug. "Why did the result never arrive" is
+     * not answerable from the backend's own log — the backend sees a match that
+     * simply stopped talking — and the container that could have answered it was
+     * deleted seconds after the question arose. Written on the way out rather
+     * than streamed, because a match server that is still running still has its
+     * log where it belongs.
+     */
+    val logDir: java.nio.file.Path? = null,
+    /** Lines kept from the tail of a container log. A match server is chatty. */
+    val logTailLines: Int = 5_000,
+    /**
+     * Kept container logs, newest first; older ones are deleted as new ones
+     * arrive. Retention is a count rather than an age because the thing being
+     * rationed is disk on a small host, and matches arrive irregularly.
+     */
+    val logsKept: Int = 50,
 )
 
 /**
@@ -340,7 +361,39 @@ class MatchOrchestrator(
         releasePort(matchId)
         val name = containers.remove(matchId) ?: return
         log.info("tearing down container {}", name)
+        // Before the remove, never after: `docker rm -f` takes the log with it.
+        // Failing to keep a log must not stop the teardown — a container left
+        // running holds a port, and that costs an actual match.
+        runCatching { keepLog(matchId, name) }
+            .onFailure { log.warn("could not keep the log of {}: {}", name, it.toString()) }
         runtime.remove(name)
+    }
+
+    /**
+     * Copy [name]'s console output into [OrchestratorConfig.logDir].
+     *
+     * Named after the match rather than the container so it can be found from a
+     * match id, which is what a player report carries.
+     */
+    private fun keepLog(matchId: String, name: String) {
+        val dir = config.logDir ?: return
+        val text = runtime.logs(name, config.logTailLines) ?: return
+        java.nio.file.Files.createDirectories(dir)
+        val file = dir.resolve("$matchId.log")
+        java.nio.file.Files.writeString(file, text)
+        log.info("kept {} lines of {} in {}", text.lineSequence().count(), name, file)
+        pruneLogs(dir)
+    }
+
+    /** Keep the newest [OrchestratorConfig.logsKept] files, delete the rest. */
+    private fun pruneLogs(dir: java.nio.file.Path) {
+        val files = java.nio.file.Files.list(dir).use { stream ->
+            stream.filter { it.fileName.toString().endsWith(".log") }.toList()
+        }
+        if (files.size <= config.logsKept) return
+        files.sortedByDescending { runCatching { java.nio.file.Files.getLastModifiedTime(it) }.getOrNull() }
+            .drop(config.logsKept)
+            .forEach { runCatching { java.nio.file.Files.deleteIfExists(it) } }
     }
 
     /**

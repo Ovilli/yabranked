@@ -153,12 +153,16 @@ All `BackendClient` methods block. Call them from `YabRankedClient.workers` (a s
 
 ## Environment variables
 
-The backend reads everything ad hoc via `System.getenv` in `Main.kt` — that file is the authoritative list. Two inconsistencies that bite:
+`config/BackendConfig.kt` parses and validates every setting once at startup — that file is the authoritative list, not `Main.kt`. Everything boolean goes through one parser that accepts `1/true/yes/on` and `0/false/no/off` and **rejects** anything else, so the old trap where `YABRANKED_ONLINE_MODE=0` *enabled* online mode is gone. A malformed value aborts startup rather than being guessed at.
 
-- Booleans are not uniform: `YABRANKED_FAKE_AUTH` / `_ORCHESTRATE` / `_SEED` are true only when `== "1"`, while `YABRANKED_ONLINE_MODE` / `_HOST_NETWORK` are true unless `== "false"` (so `YABRANKED_ONLINE_MODE=0` *enables* online mode).
 - `--fake-auth` (or `YABRANKED_FAKE_AUTH=1`) both disables Mojang verification and enables `GET /v1/debug/matches/{id}/token`. Nothing stops it being combined with a real `YABRANKED_DATABASE_URL`.
+- Nothing is set for `YABRANKED_MIN_CLIENT_VERSION` by default and the backend now says so at startup. An unset gate is not neutral: adding a `QueueServerMessage` or `PartyServerMessage` subtype breaks old clients on the unknown `type` discriminator, and the gate is the only thing that turns that into a 426 instead of a downstream symptom.
 
 `YABRANKED_REPLAY_DIR` is where replay packet streams are written. Unset means they are held in memory and lost on restart — which is fine for dev and is not what a deployment wants, because a recording is tens of megabytes per player.
+
+**`ReplayPolicy`'s limits are settings, not constants** (`YABRANKED_REPLAY_RETENTION_DAYS`, `_SAVED_PER_PLAYER`, `_SAVED_BYTES_PER_PLAYER`, `_MAX_RECORDING_BYTES`; sizes take a `k`/`m`/`g` suffix). The defaults — 7 days, 10 pinned, 2 GiB per player, 512 MiB per match — assume a host with room, and the host this runs on is a Pi with a nearly full SD card. Baking them in meant the only way to fit the disk was a rebuild.
+
+**`YABRANKED_MATCH_LOG_DIR` keeps a match container's log past its container.** Teardown is `docker rm -f`, which destroys the only record of what happened *inside* a match — whether the agent configured YAB, whether the game ever ended, why a result never arrived. The backend copies the tail out to `<matchId>.log` **before** the remove (a log read afterwards is no log at all) and keeps the newest `logsKept`. Unset keeps the old behaviour of discarding them.
 
 `YABRANKED_SEED=1` loads the fixture ladder from `dev/Seeder.kt` for UI work; it refuses to run against Postgres.
 

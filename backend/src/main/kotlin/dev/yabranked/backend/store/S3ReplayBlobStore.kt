@@ -56,6 +56,33 @@ class S3ReplayBlobStore(
 ) : ReplayBlobStore {
     private val log = LoggerFactory.getLogger("replays")
 
+    /**
+     * Report a failed storage call as one line, with the trace only at DEBUG.
+     *
+     * Every call here can fail for a reason that is about the endpoint and not
+     * about this code, and each failure used to be logged with its full stack —
+     * an AWS SDK trace is roughly ninety frames. When a MinIO went away and left
+     * its endpoint configured, that turned into 5816 exceptions in ten minutes,
+     * about 559 000 lines, which pushed the entire day's journal out of the ring
+     * buffer. The evidence needed to debug the *matches* played that day was
+     * destroyed by the logging of an unrelated fault, so a routine failure now
+     * costs one line and the trace stays available behind a log level.
+     */
+    private fun failed(what: String, cause: Throwable) {
+        log.warn("could not {}: {}", what, cause.rootMessage())
+        log.debug("could not {}", what, cause)
+    }
+
+    /** The innermost cause's type and message — "why", without the ninety frames. */
+    private fun Throwable.rootMessage(): String {
+        var root: Throwable = this
+        // Guarded against a cycle: a self-referencing cause is rare and hanging
+        // the logger is a worse outcome than an imprecise message.
+        var hops = 0
+        while (root.cause != null && root.cause !== root && hops++ < 10) root = root.cause!!
+        return "${root.javaClass.simpleName}: ${root.message ?: "no message"}"
+    }
+
     private fun streamPrefix(matchId: UUID, index: Int) = "$prefix/$matchId/$index/"
 
     private fun matchPrefix(matchId: UUID) = "$prefix/$matchId/"
@@ -81,7 +108,7 @@ class S3ReplayBlobStore(
                 token = response.nextContinuationToken()
             } while (response.isTruncated == true)
         }.sortedBy { it.key() }
-    }.onFailure { log.warn("could not list replay chunks for {}/{}", matchId, index, it) }
+    }.onFailure { failed("list replay chunks for $matchId/$index", it) }
         .getOrDefault(emptyList())
 
     override fun length(matchId: UUID, index: Int): Long {
@@ -101,7 +128,7 @@ class S3ReplayBlobStore(
             )
             current + bytes.size
         }.onFailure {
-            log.warn("could not store a replay chunk for {}/{} at {}", matchId, index, offset, it)
+            failed("store a replay chunk for $matchId/$index at $offset", it)
         }.getOrDefault(current)
     }
 
@@ -129,7 +156,7 @@ class S3ReplayBlobStore(
                         .build()
                 ).asByteArray()
             }.onSuccess { out.write(it) }
-                .onFailure { log.warn("could not read replay chunk {}", chunk.key(), it) }
+                .onFailure { failed("read replay chunk ${chunk.key()}", it) }
         }
         return out.toByteArray()
     }
@@ -149,7 +176,7 @@ class S3ReplayBlobStore(
             token = response.nextContinuationToken()
         } while (response.isTruncated == true)
         total
-    }.onFailure { log.warn("could not size the replay for {}", matchId, it) }.getOrDefault(0)
+    }.onFailure { failed("size the replay for $matchId", it) }.getOrDefault(0)
 
     override fun delete(matchId: UUID) {
         runCatching {
@@ -177,7 +204,7 @@ class S3ReplayBlobStore(
                 }
                 token = response.nextContinuationToken()
             } while (response.isTruncated == true)
-        }.onFailure { log.warn("could not delete the replay for {}", matchId, it) }
+        }.onFailure { failed("delete the replay for $matchId", it) }
     }
 
     companion object {

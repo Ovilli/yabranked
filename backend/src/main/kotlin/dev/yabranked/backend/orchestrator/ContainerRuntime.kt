@@ -44,6 +44,20 @@ interface ContainerRuntime {
     fun remove(name: String)
 
     /**
+     * The container's console output, newest [tailLines] lines, or null when it
+     * cannot be read.
+     *
+     * Exists because [remove] destroys the only copy. A match server's log is
+     * the sole evidence for anything that goes wrong *inside* a match — whether
+     * the agent configured YAB, whether the game ever ended, why a result was
+     * never reported — and every one of those investigations used to begin after
+     * the container had already been deleted.
+     *
+     * Defaulted so a test fake needs no opinion about logging.
+     */
+    fun logs(name: String, tailLines: Int): String? = null
+
+    /**
      * Names of existing containers (running or not) whose name starts with
      * [namePrefix]. Used to sweep up match servers orphaned by a restart.
      */
@@ -142,6 +156,22 @@ class DockerCliRuntime : ContainerRuntime {
     override fun remove(name: String) {
         val (exit, output) = exec("docker", "rm", "-f", name)
         if (exit != 0) log.warn("docker rm {} failed ({}): {}", name, exit, output)
+    }
+
+    override fun logs(name: String, tailLines: Int): String? {
+        val (exit, output) = runCatching {
+            exec("docker", "logs", "--timestamps", "--tail", tailLines.toString(), name)
+        }.getOrElse {
+            log.warn("docker logs {} failed: {}", name, it.toString())
+            return null
+        }
+        // A container that is already gone is not an error worth a stack trace:
+        // the sweep reaches containers docker has removed on its own.
+        if (exit != 0) {
+            log.debug("docker logs {} exited {}: {}", name, exit, output)
+            return null
+        }
+        return output.takeIf { it.isNotBlank() }
     }
 
     override fun isRunning(name: String): Boolean {
