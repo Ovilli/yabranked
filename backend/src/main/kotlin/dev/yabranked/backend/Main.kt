@@ -53,6 +53,7 @@ import dev.yabranked.backend.store.InMemoryMatchStore
 import dev.yabranked.backend.store.InMemoryPlayerStore
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import kotlinx.coroutines.CoroutineDispatcher
@@ -186,7 +187,18 @@ fun main(args: Array<String>) {
         log.warn("!! fake auth enabled — do not expose this instance publicly")
         FakeSessionVerifier()
     } else {
-        MojangSessionVerifier(HttpClient(CIO))
+        // Timeouts are not optional here: a player is sitting on a loading
+        // screen for however long this takes, and an untimed client waits on a
+        // half-open socket forever rather than failing into the retry.
+        MojangSessionVerifier(
+            HttpClient(CIO) {
+                install(HttpTimeout) {
+                    connectTimeoutMillis = 5_000
+                    socketTimeoutMillis = 10_000
+                    requestTimeoutMillis = 15_000
+                }
+            },
+        )
     }
 
     matchService.onMatchCreated { record ->

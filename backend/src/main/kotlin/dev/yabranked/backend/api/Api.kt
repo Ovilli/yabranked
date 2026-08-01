@@ -71,6 +71,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.io.IOException
 import java.security.SecureRandom
 import java.time.Clock
 import java.time.Instant
@@ -490,7 +491,21 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 return@post
             }
 
-            val verified = deps.verifier.verify(request.username, request.serverId)
+            // Reaching Mojang and being told "no" is a 401; not reaching Mojang
+            // at all is not the player's fault and is very often transient, so
+            // it answers 503 rather than falling through to the catch-all 500.
+            // The distinction is the whole difference between "your session is
+            // bad, sign in again" and "try that again in a moment".
+            val verified = try {
+                deps.verifier.verify(request.username, request.serverId)
+            } catch (e: IOException) {
+                call.application.log.warn("session verification unreachable", e)
+                call.respond(
+                    HttpStatusCode.ServiceUnavailable,
+                    mapOf("error" to "could not reach Mojang session servers, try again"),
+                )
+                return@post
+            }
             if (verified == null) {
                 call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "session verification failed"))
                 return@post
