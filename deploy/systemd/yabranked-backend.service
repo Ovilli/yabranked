@@ -1,0 +1,22 @@
+[Unit]
+# Runs natively rather than in a container: on this host the JVM SIGSEGVs
+# reading its own module image inside Docker, while the identical distribution
+# starts in a quarter of a second on the host JVM. Running natively also means
+# the orchestrator uses the host's docker CLI directly, so nothing has to mount
+# the Docker socket into a container.
+Description=YAB Ranked backend
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=rsmm
+EnvironmentFile=/etc/yabranked/backend.env
+ExecStart=/opt/yabranked/app/bin/backend
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/opt/yabranked
+
+[Install]
+WantedBy=multi-user.target

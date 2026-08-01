@@ -60,6 +60,32 @@ docker compose up -d --build
 curl https://<your hostname>/health     # {"status":"up"}
 ```
 
+## Running the backend natively instead (systemd)
+
+`systemd/` holds the unit this project's own deployment actually runs, because
+on that host the JVM SIGSEGVs reading its own module image inside Docker while
+the identical distribution starts in a quarter of a second on the host JVM. It
+is an alternative to the backend service in `docker-compose.yml`, not an
+addition — run one or the other. Match containers are still Docker either way.
+
+```sh
+./gradlew :backend:installDist                        # on the desktop
+# copy backend/build/install/backend to /opt/yabranked/app on the host, then:
+sudo cp -r deploy/systemd/yabranked-backend.service* /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now yabranked-backend
+```
+
+`User=` and the `/opt/yabranked/app` path are baked into the unit; change both
+if yours differ. `EnvironmentFile=/etc/yabranked/backend.env` takes the same
+keys as `.env.example` — the duplicate-key warning at the top of that file
+applies to `EnvironmentFile` too, and cost a real afternoon here.
+
+The drop-in exists because the JVM answers SIGTERM with 143, which systemd
+otherwise reports as a failed unit after every ordinary restart. It is a
+separate file rather than a line in the unit so that replacing the unit does
+not silently drop it.
+
 ## Notes
 
 - **The backend mounts the Docker socket**, which is root-equivalent access to
