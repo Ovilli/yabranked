@@ -128,7 +128,40 @@ class ReplayCache(private val root: Path) {
             Files.writeString(metaPath(matchId), json.encodeToString(MatchReplayMeta.serializer(), meta))
         }.onFailure { log.warn("could not cache the replay index", it) }
 
+        prune(keep = matchId)
+
         return Result.Ready(meta, dir)
+    }
+
+    /**
+     * Drop the oldest recordings until the cache is under [maxBytes].
+     *
+     * A recording is tens of megabytes and nothing ever removed one. The library
+     * screen shows the total and offers a Delete, which is real management but
+     * only for a player who thinks to look — everyone else watches ten matches
+     * and silently gives up half a gigabyte of their game directory. The backend
+     * caps what it stores per player; this is the same bargain on the machine
+     * that has to hold it.
+     *
+     * Oldest by recording time rather than by last watched: what makes a
+     * recording worth keeping is that it is recent, and a rewatch does not make
+     * an old match new. [keep] is never dropped whatever its age — evicting the
+     * recording that was just downloaded, in the call that downloaded it, would
+     * be an expensive way to achieve nothing.
+     */
+    fun prune(keep: String? = null, maxBytes: Long = MAX_CACHE_BYTES) {
+        val entries = cached()
+        var total = entries.sumOf { it.bytes }
+        if (total <= maxBytes) return
+        // Oldest first: cached() is newest first, so this walks it backwards.
+        for (entry in entries.asReversed()) {
+            if (total <= maxBytes) return
+            val id = entry.meta.matchId
+            if (id == keep) continue
+            log.info("replay cache over {} bytes; dropping {}", maxBytes, id)
+            evict(id)
+            total -= entry.bytes
+        }
     }
 
     /** One recording sitting on this machine, and how much room it takes. */
@@ -201,6 +234,18 @@ class ReplayCache(private val root: Path) {
          * coarser progress bar and a longer redo after a dropped connection.
          */
         private const val CHUNK_BYTES = 4 * 1024 * 1024
+
+        /**
+         * How much of the game directory the cache may take before the oldest
+         * recordings are dropped.
+         *
+         * A packet capture runs to tens of megabytes a player, so this is a
+         * handful of matches rather than a library. It is deliberately generous
+         * enough that a session of watching back today's games never evicts one
+         * of them mid-session, and small enough that a player who forgets the
+         * feature exists does not find a gigabyte missing a month later.
+         */
+        const val MAX_CACHE_BYTES = 750L * 1024 * 1024
 
         /** Under the game directory, so it moves with the instance. */
         fun default(): ReplayCache =

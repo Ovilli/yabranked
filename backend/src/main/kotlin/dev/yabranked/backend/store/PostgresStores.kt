@@ -497,17 +497,18 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
         }
     }
 
-    override fun historyFor(player: UUID, season: Int, limit: Int): List<MatchRecord> =
+    override fun historyFor(player: UUID, season: Int, limit: Int, offset: Int): List<MatchRecord> =
         db.withConnection { c ->
             c.prepareStatement(
                 """
                 SELECT * FROM matches WHERE season = ? AND participants @> ARRAY[?]::uuid[]
-                ORDER BY created_at DESC LIMIT ?
+                ORDER BY created_at DESC LIMIT ? OFFSET ?
                 """.trimIndent()
             ).use { s ->
                 s.setInt(1, season)
                 s.setObject(2, player)
                 s.setInt(3, limit)
+                s.setInt(4, offset)
                 s.executeQuery().use { r ->
                     buildList { while (r.next()) add(r.toMatch()) }
                 }

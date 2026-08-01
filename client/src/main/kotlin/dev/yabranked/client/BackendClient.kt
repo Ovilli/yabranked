@@ -174,8 +174,20 @@ class BackendClient(
     fun fetchProfile(uuid: String): Fetch<PlayerProfile> =
         get("/v1/players/$uuid") { json.decodeFromString(PlayerProfile.serializer(), it) }
 
-    fun fetchHistory(uuid: String, limit: Int = 10): Fetch<List<MatchHistoryEntry>> =
-        get("/v1/players/$uuid/matches?limit=$limit") { json.decodeFromString(it) }
+    /**
+     * A player by name rather than by uuid, for a search box.
+     *
+     * The name is percent-encoded: Minecraft names cannot contain a slash or a
+     * space, but the box will happily hold whatever the player typed, and a raw
+     * value there would build a URL that means something else.
+     */
+    fun fetchProfileByName(name: String): Fetch<PlayerProfile> =
+        get("/v1/players/by-name/${java.net.URLEncoder.encode(name, Charsets.UTF_8)}") {
+            json.decodeFromString(PlayerProfile.serializer(), it)
+        }
+
+    fun fetchHistory(uuid: String, limit: Int = 10, offset: Int = 0): Fetch<List<MatchHistoryEntry>> =
+        get("/v1/players/$uuid/matches?limit=$limit&offset=$offset") { json.decodeFromString(it) }
 
     /** Unlocked achievements for [uuid], oldest first; empty on any failure —
      *  the achievement strip is an embellishment, not a screen's content. */

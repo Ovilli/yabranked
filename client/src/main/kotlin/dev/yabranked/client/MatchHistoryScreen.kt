@@ -29,6 +29,15 @@ class MatchHistoryScreen(
     /** First visible row index; driven by the mouse wheel. */
     private var scroll = 0
 
+    /** True once the backend has answered with a short page; see [loadMore]. */
+    private var atEnd = false
+
+    /** True while a further page is in flight, so the button cannot stack them. */
+    private var loadingMore = false
+    /** The list's scrollbar, draggable; see [dev.yabranked.client.ui.Scrollbar]. */
+    private val bar = dev.yabranked.client.ui.Scrollbar()
+
+
     /** Wall-clock at first render, so the screen fades in from black. */
     private var openedAt = 0L
 
@@ -86,12 +95,47 @@ class MatchHistoryScreen(
         val profile = RankedState.profile ?: return
         val minecraft = this.minecraft
         entries = Loadable.Loading
+        atEnd = false
         YabRankedClient.workers.execute {
-            val fetched = backend.fetchHistory(profile.uuid, limit = 50)
+            val fetched = backend.fetchHistory(profile.uuid, limit = PAGE)
             minecraft.execute {
                 entries = fetched.toLoadable()
+                atEnd = (entries.valueOrNull?.size ?: 0) < PAGE
                 // A failed read leaves the streak alone rather than zeroing it.
                 entries.valueOrNull?.let { RankedState.winStreak = RankedState.currentWinStreak(it) }
+            }
+        }
+    }
+
+    /**
+     * Append the next page.
+     *
+     * The history used to be one request for fifty rows and that was the whole
+     * of it: a player with more matches than that simply could not reach them,
+     * and nothing on screen said so. Rows already on screen are kept — this
+     * grows the list rather than replacing it, so the scroll position stays put.
+     */
+    private fun loadMore() {
+        val backend = RankedState.backend ?: return
+        val profile = RankedState.profile ?: return
+        val have = entries.valueOrNull ?: return
+        if (loadingMore || atEnd) return
+        loadingMore = true
+        val minecraft = this.minecraft
+        YabRankedClient.workers.execute {
+            val fetched = backend.fetchHistory(profile.uuid, limit = PAGE, offset = have.size)
+            minecraft.execute {
+                loadingMore = false
+                val page = (fetched as? BackendClient.Fetch.Ok)?.value
+                if (page == null) {
+                    RankedNotice.error("Could not load more matches", title = "History")
+                    return@execute
+                }
+                // A short page is the end of the history; a page that adds
+                // nothing is too, and both have to stop the button offering more.
+                atEnd = page.size < PAGE
+                if (page.isEmpty()) return@execute
+                entries = Loadable.Loaded(have + page)
             }
         }
     }
@@ -175,7 +219,18 @@ class MatchHistoryScreen(
             val hovered = (mouseX in left..(left + WIDTH) && mouseY in y until (y + ROW_HEIGHT - 1)) || index == selected
             drawRow(g, left, y, entry, hovered)
         }
-        Ui.scrollbar(g, left + WIDTH + 2, rowsTop, visible * ROW_HEIGHT, shown.size, visible, scroll)
+        bar.draw(g, left + WIDTH + 2, rowsTop, visible * ROW_HEIGHT, shown.size, visible, scroll, mouseX, mouseY)
+
+        // Reaching the bottom asks for the next page. A button would need room
+        // this screen does not have — the list already runs to the Back button —
+        // and scrolling to the end is the gesture that means "more" anyway. It
+        // fires while searching too: the filter only sees rows that have been
+        // fetched, so a name with no hits on page one may well have them later.
+        if (!atEnd && scroll + visible >= shown.size) loadMore()
+        if (loadingMore) {
+            g.centeredText(font, "§8loading more…", centerX, rowsTop + visible * ROW_HEIGHT + 2, Ui.TEXT_FAINT)
+        }
+
         Ui.fadeIn(g, width, height, openedAt)
     }
 
@@ -276,7 +331,18 @@ class MatchHistoryScreen(
         if (ago.isNotEmpty()) Ui.textRight(g, font, "§8$ago", left + WIDTH - 10, textY, Ui.TEXT_FAINT)
     }
 
+    override fun onMouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        bar.dragged(event.y())?.let { scroll = it; return true }
+        return super.onMouseDragged(event, dragX, dragY)
+    }
+
+    override fun onMouseReleased(event: MouseButtonEvent): Boolean {
+        bar.released()
+        return super.onMouseReleased(event)
+    }
+
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        bar.clicked(event.x(), event.y(), scroll)?.let { scroll = it; return true }
         if (super.onMouseClicked(event, doubled)) return true
         if (retry.clicked(event.x(), event.y())) return true
         if (event.button() != 0) return false
@@ -328,6 +394,13 @@ class MatchHistoryScreen(
     }
 
     private companion object {
+        /**
+         * Rows a page. The backend caps a single read at fifty, so this is that
+         * cap rather than a preference — asking for more would silently get
+         * fifty and make every page look like the last one.
+         */
+        const val PAGE = 50
+
         const val WIDTH = 280
         const val TOP = 68 // rows top when the chart is hidden (below the search box)
         const val ROW_HEIGHT = 14

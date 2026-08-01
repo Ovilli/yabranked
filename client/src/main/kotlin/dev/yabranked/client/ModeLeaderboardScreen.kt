@@ -38,6 +38,9 @@ class ModeLeaderboardScreen(
     private var board: Loadable<LeaderboardResponse> = Loadable.Loading
     private var index = 0
     private var scroll = 0
+    /** The list's scrollbar, draggable; see [dev.yabranked.client.ui.Scrollbar]. */
+    private val bar = dev.yabranked.client.ui.Scrollbar()
+
     private var openedAt = 0L
 
     /** Bumped per load; a stale response is dropped rather than drawn. */
@@ -104,7 +107,18 @@ class ModeLeaderboardScreen(
         return true
     }
 
+    override fun onMouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        bar.dragged(event.y())?.let { scroll = it / ROW; return true }
+        return super.onMouseDragged(event, dragX, dragY)
+    }
+
+    override fun onMouseReleased(event: MouseButtonEvent): Boolean {
+        bar.released()
+        return super.onMouseReleased(event)
+    }
+
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        bar.clicked(event.x(), event.y(), scroll * ROW)?.let { scroll = it / ROW; return true }
         if (retry.clicked(event.x(), event.y())) return true
         val rows = board.valueOrNull?.rows ?: return super.onMouseClicked(event, doubled)
         if (event.y() >= listTop && event.y() < listBottom) {
@@ -189,7 +203,7 @@ class ModeLeaderboardScreen(
         }
         g.disableScissor()
 
-        Ui.scrollbar(g, width - 8, listTop, listBottom - listTop, rows.size * ROW, listBottom - listTop, scroll * ROW)
+        bar.draw(g, width - 8, listTop, listBottom - listTop, rows.size * ROW, listBottom - listTop, scroll * ROW, mouseX, mouseY)
 
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
         Ui.fadeIn(g, width, height, openedAt)

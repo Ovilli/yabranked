@@ -20,6 +20,15 @@ class LeaderboardScreen(
 
     private var entries: Loadable<List<PlayerProfile>> = Loadable.Loading
 
+    /** A player found by name who is not on the fetched page; see [lookUp]. */
+    private var searchResult: PlayerProfile? = null
+
+    /** The query [searchResult] answers, so one name is only ever asked once. */
+    private var searchedFor: String? = null
+    /** The list's scrollbar, draggable; see [dev.yabranked.client.ui.Scrollbar]. */
+    private val bar = dev.yabranked.client.ui.Scrollbar()
+
+
     /** The way back from a failed read; see [dev.yabranked.client.ui.RetryCard]. */
     private val retry = dev.yabranked.client.ui.RetryCard {
         RankedState.backend?.let { load(it) }
@@ -71,10 +80,48 @@ class LeaderboardScreen(
         val base = list.mapIndexed { i, p -> (i + 1) to p }
             .filter { q.isEmpty() || it.second.name.contains(q, ignoreCase = true) }
             .filter { tier == null || it.second.tier.substringBefore(' ') == tier }
+        // Nothing on this page matched, but the ladder is longer than the page:
+        // the player looked up by name carries their real rank, so they slot in
+        // as an ordinary row rather than as a special case the list has to know
+        // about. Still subject to the tier filter — a search result the filter
+        // excludes is a row the player asked not to see.
+        if (base.isEmpty() && q.isNotEmpty()) {
+            val found = searchResult
+            if (found != null && found.name.equals(q, ignoreCase = true) &&
+                (tier == null || found.tier.substringBefore(' ') == tier)
+            ) {
+                return listOf((found.rank ?: 0) to found)
+            }
+        }
         return when (sortMode) {
             1 -> base.sortedByDescending { winRate(it.second) }
             2 -> base.sortedByDescending { games(it.second) }
             else -> base
+        }
+    }
+
+    /**
+     * Ask the backend for a name the loaded page does not contain.
+     *
+     * Only once the local filter has come up empty, and only for a name long
+     * enough to be one: the box fires this on every keystroke otherwise, and a
+     * request per character is a request per character whatever the answer is.
+     * A miss is remembered as a miss so the same typo is not asked twice.
+     */
+    private fun lookUp(query: String) {
+        if (query.length < MIN_SEARCH_LENGTH) return
+        if (query.equals(searchedFor, ignoreCase = true)) return
+        val backend = RankedState.backend ?: return
+        searchedFor = query
+        val minecraft = this.minecraft
+        YabRankedClient.workers.execute {
+            val fetched = backend.fetchProfileByName(query)
+            minecraft.execute {
+                // A stale answer is dropped: the box has moved on and the row it
+                // describes is not the one being looked for.
+                if (!query.equals(searchedFor, ignoreCase = true)) return@execute
+                searchResult = (fetched as? BackendClient.Fetch.Ok)?.value
+            }
         }
     }
 
@@ -122,7 +169,19 @@ class LeaderboardScreen(
                 setHint(Component.literal("Search players…"))
                 setMaxLength(32)
                 value = search?.value ?: ""
-                setResponder { scroll = 0; selected = -1 }
+                setResponder { typed ->
+                    scroll = 0
+                    selected = -1
+                    // Only reaches the network once the loaded page has nothing;
+                    // rows() decides that, and this is where the typing is.
+                    val q = typed.trim()
+                    if (q.isEmpty()) {
+                        searchResult = null
+                        searchedFor = null
+                    } else if (entries.valueOrNull?.none { it.name.contains(q, ignoreCase = true) } == true) {
+                        lookUp(q)
+                    }
+                }
             }
         )
         sortButton = addRenderableWidget(
@@ -267,7 +326,7 @@ class LeaderboardScreen(
             val hovered = (mouseX in left..(left + WIDTH) && mouseY in y until (y + ROW_HEIGHT - 1)) || index == selected
             drawRow(g, left, y, position, profile, isSelf = profile.uuid == self, hovered = hovered)
         }
-        Ui.scrollbar(g, left + WIDTH + 2, TOP, visible * ROW_HEIGHT, rows.size, visible, scroll)
+        bar.draw(g, left + WIDTH + 2, TOP, visible * ROW_HEIGHT, rows.size, visible, scroll, mouseX, mouseY)
         Ui.fadeIn(g, width, height, openedAt)
     }
 
@@ -346,10 +405,21 @@ class LeaderboardScreen(
         Ui.textRight(g, font, "${profile.rating}", left + WIDTH - 10, textY, Ui.WHITE)
     }
 
+    override fun onMouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        bar.dragged(event.y())?.let { scroll = it; return true }
+        return super.onMouseDragged(event, dragX, dragY)
+    }
+
+    override fun onMouseReleased(event: MouseButtonEvent): Boolean {
+        bar.released()
+        return super.onMouseReleased(event)
+    }
+
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (super.onMouseClicked(event, doubled)) return true
         if (event.button() != 0) return false
         if (retry.clicked(event.x(), event.y())) return true
+        bar.clicked(event.x(), event.y(), scroll)?.let { scroll = it; return true }
         val rows = rows()
         if (rows.isEmpty()) return false
 
@@ -386,6 +456,15 @@ class LeaderboardScreen(
     }
 
     private companion object {
+        /**
+         * Shortest query worth asking the backend about.
+         *
+         * The lookup is by exact name, so a prefix cannot match anyway, and
+         * three characters is where a name stops being a keystroke on its way
+         * somewhere else.
+         */
+        const val MIN_SEARCH_LENGTH = 3
+
         const val WIDTH = 280
         const val TOP = 64 // leaves room for the search box (y=36..50) + column headers
         const val ROW_HEIGHT = 14

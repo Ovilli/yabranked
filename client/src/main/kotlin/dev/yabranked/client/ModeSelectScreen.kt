@@ -62,6 +62,9 @@ class ModeSelectScreen(
 
     private var selected = RankedState.selectedFormat
     private var scroll = 0
+    /** The list's scrollbar, draggable; see [dev.yabranked.client.ui.Scrollbar]. */
+    private val bar = dev.yabranked.client.ui.Scrollbar()
+
     private var openedAt = 0L
 
     /**
@@ -136,13 +139,27 @@ class ModeSelectScreen(
         return true
     }
 
+    override fun onMouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        bar.dragged(event.y())?.let { scroll = it; return true }
+        return super.onMouseDragged(event, dragX, dragY)
+    }
+
+    override fun onMouseReleased(event: MouseButtonEvent): Boolean {
+        bar.released()
+        return super.onMouseReleased(event)
+    }
+
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         // The click that opened this screen can be followed immediately by a
         // second one from the same press-and-hold, at a cursor position chosen
         // for the *previous* screen's button — which lands on whatever card
         // happens to be under it here. Ignore input until the player has had a
-        // chance to see what they are clicking.
+        // chance to see what they are clicking. The scrollbar is behind this
+        // guard too: a stray press that scrolls the list is milder than one that
+        // picks a mode, but it is still a press the player did not make.
         if (System.currentTimeMillis() - createdAt < INPUT_GUARD_MS) return true
+
+        bar.clicked(event.x(), event.y(), scroll)?.let { scroll = it; return true }
 
         // Only what is actually visible is clickable. The cards are scissored to
         // the viewport but their rectangles are not, so a card scrolled past the
@@ -235,7 +252,7 @@ class ModeSelectScreen(
         g.disableScissor()
         contentHeight = y + scroll - listTop
 
-        Ui.scrollbar(g, width - 8, listTop, listBottom - listTop, contentHeight, listBottom - listTop, scroll)
+        bar.draw(g, width - 8, listTop, listBottom - listTop, contentHeight, listBottom - listTop, scroll, mouseX, mouseY)
 
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
         Ui.fadeIn(g, width, height, openedAt)

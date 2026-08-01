@@ -335,7 +335,14 @@ interface MatchStore {
 
     fun insert(record: MatchRecord)
     fun update(record: MatchRecord)
-    fun historyFor(player: UUID, season: Int, limit: Int): List<MatchRecord>
+    /**
+     * A player's matches, newest first, skipping [offset] of them.
+     *
+     * The offset exists so the client can go past its first page. A history
+     * screen that stops at fifty matches is not showing a history, and a player
+     * who has played more has no way to reach the rest.
+     */
+    fun historyFor(player: UUID, season: Int, limit: Int, offset: Int = 0): List<MatchRecord>
 
     /**
      * [historyFor] restricted to matches that reached a real result. Voided and
@@ -463,10 +470,11 @@ class InMemoryMatchStore : MatchStore {
     // Membership goes through `participants`/`sideOf` rather than playerA/playerB:
     // in a team match those two are only the first player of each side, so
     // matching on them alone would hide four of a 3v3's six players' own games.
-    override fun historyFor(player: UUID, season: Int, limit: Int): List<MatchRecord> =
+    override fun historyFor(player: UUID, season: Int, limit: Int, offset: Int): List<MatchRecord> =
         matches.values
             .filter { it.season == season && player in it.participants }
             .sortedByDescending { it.createdAt }
+            .drop(offset)
             .take(limit)
 
     override fun recentDecided(player: UUID, season: Int, limit: Int): List<MatchRecord> =

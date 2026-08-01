@@ -39,8 +39,8 @@ private class FlakyMatchStore(private var failures: Int) : MatchStore {
 
     override fun update(record: MatchRecord) = delegate.update(record)
 
-    override fun historyFor(player: UUID, season: Int, limit: Int) =
-        delegate.historyFor(player, season, limit)
+    override fun historyFor(player: UUID, season: Int, limit: Int, offset: Int) =
+        delegate.historyFor(player, season, limit, offset)
 
     override fun recentDecided(player: UUID, season: Int, limit: Int) =
         delegate.recentDecided(player, season, limit)

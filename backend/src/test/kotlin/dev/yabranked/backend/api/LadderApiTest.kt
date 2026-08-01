@@ -87,6 +87,49 @@ class LadderApiTest {
     }
 
     @Test
+    fun `history pages, and a page past the end is empty rather than the first page again`() = testApplication {
+        // A history that stops at its first page is not a history: the player
+        // with more matches than fit simply could not reach the rest.
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+        val a = UUID.randomUUID()
+        val b = UUID.randomUUID()
+        repeat(3) { playedMatch(a, b) }
+
+        val first: List<MatchHistoryEntry> = client.get("/v1/players/$a/matches?limit=2").body()
+        val second: List<MatchHistoryEntry> = client.get("/v1/players/$a/matches?limit=2&offset=2").body()
+        val past: List<MatchHistoryEntry> = client.get("/v1/players/$a/matches?limit=2&offset=99").body()
+
+        assertEquals(2, first.size)
+        assertEquals(1, second.size)
+        assertTrue(past.isEmpty(), "an offset past the end must not wrap round to the first page")
+        assertTrue(
+            first.map { it.matchId }.intersect(second.map { it.matchId }.toSet()).isEmpty(),
+            "pages overlapped: ${first.map { it.matchId }} then ${second.map { it.matchId }}",
+        )
+    }
+
+    @Test
+    fun `a player can be found by name, whatever their rank`() = testApplication {
+        // The ladder screen used to filter the page it had fetched, so anyone
+        // below the last row answered "no results" — which reads as "no such
+        // player" rather than "not on this page".
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+        val a = UUID.randomUUID()
+        playedMatch(a, UUID.randomUUID())
+
+        val found: dev.yabranked.proto.PlayerProfile = client.get("/v1/players/by-name/Anna").body()
+        assertEquals(a.toString(), found.uuid)
+
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.get("/v1/players/by-name/NobodyAtAll").status,
+            "an unknown name must 404 rather than answer with somebody",
+        )
+    }
+
+    @Test
     fun `the leaderboard lists only placed players and says so honestly`() = testApplication {
         // It used to query with minMatches=1 while hardcoding isPlaced=true, so
         // one lucky win could show as rank 1 wearing a tier it had not earned.

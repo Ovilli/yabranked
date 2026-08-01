@@ -600,6 +600,27 @@ fun Application.rankedApi(deps: ApiDependencies) {
             }
         }
 
+        /**
+         * A player by name, answering exactly what `/v1/players/{uuid}` does.
+         *
+         * The ladder screen's search used to filter the fifty rows it had
+         * fetched, so looking for anyone below rank fifty answered "no results"
+         * — which reads as "no such player" rather than "not on this page".
+         * Resolution is the same [PlayerStore.findByName] the friend requests
+         * use, so the two agree on what a name means.
+         */
+        get("/v1/players/by-name/{name}") {
+            val name = call.parameters["name"].orEmpty()
+            val viewer = authedPlayer(call)
+            val profile = onStore { deps.players.findByName(name) }
+                ?.let { profileOf(it.uuid, redact = true, viewer = viewer) }
+            if (profile == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown player"))
+            } else {
+                call.respond(profile)
+            }
+        }
+
         get("/v1/leaderboard") {
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 100) ?: 25
             val season = call.request.queryParameters["season"]?.toIntOrNull()
@@ -698,6 +719,10 @@ fun Application.rankedApi(deps: ApiDependencies) {
         get("/v1/players/{uuid}/matches") {
             val uuid = runCatching { UUID.fromString(call.parameters["uuid"]) }.getOrNull()
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 50) ?: 10
+            // Skipped rows, so a client can walk past its first page. Capped
+            // because an unbounded OFFSET is a way to make the database read a
+            // million rows to return none.
+            val offset = call.request.queryParameters["offset"]?.toIntOrNull()?.coerceIn(0, 10_000) ?: 0
             val season = call.request.queryParameters["season"]?.toIntOrNull()
                 ?: deps.seasons.currentSeason
 
@@ -712,7 +737,7 @@ fun Application.rankedApi(deps: ApiDependencies) {
                     if (!record.privacy.showMatchHistory.allows(isSelf, isFriend)) {
                         return@onStore Triple(emptyList(), emptyMap(), false)
                     }
-                    val records = deps.matches.historyFor(it, season, limit)
+                    val records = deps.matches.historyFor(it, season, limit, offset)
                     // every side of every row, not just the two captains
                     val people = deps.players.getPlayers(records.flatMap { match -> match.participants })
                     Triple(records, people, isSelf)

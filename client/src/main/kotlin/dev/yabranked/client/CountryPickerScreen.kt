@@ -19,6 +19,9 @@ class CountryPickerScreen(
 
     private var search: EditBox? = null
     private var scroll = 0
+    /** The list's scrollbar, draggable; see [dev.yabranked.client.ui.Scrollbar]. */
+    private val bar = dev.yabranked.client.ui.Scrollbar()
+
     private var saving = false
     private var status: String? = null
 
@@ -121,7 +124,7 @@ class CountryPickerScreen(
                 drawCell(g, x, y, code, hovered, code == current)
             }
         }
-        Ui.scrollbar(g, left + WIDTH + 2, TOP, visibleRows * CELL_H, rows, visibleRows, scroll)
+        bar.draw(g, left + WIDTH + 2, TOP, visibleRows * CELL_H, rows, visibleRows, scroll, mouseX, mouseY)
         Ui.fadeIn(g, width, height, openedAt)
     }
 
@@ -145,7 +148,18 @@ class CountryPickerScreen(
         g.text(font, label, x + flagW + 8, y + (h - 8) / 2, if (selected) Ui.ACCENT else Ui.WHITE)
     }
 
+    override fun onMouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        bar.dragged(event.y())?.let { scroll = it; return true }
+        return super.onMouseDragged(event, dragX, dragY)
+    }
+
+    override fun onMouseReleased(event: MouseButtonEvent): Boolean {
+        bar.released()
+        return super.onMouseReleased(event)
+    }
+
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        bar.clicked(event.x(), event.y(), scroll)?.let { scroll = it; return true }
         if (super.onMouseClicked(event, doubled)) return true
         if (event.button() != 0) return false
         val list = matches()
