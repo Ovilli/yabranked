@@ -40,7 +40,23 @@ object RankedNotice {
     private const val MAX_SHOWN = 4
 
     private const val MARGIN = 6
+
+    /** A notice with a one-line body. Two lines add [LINE]. */
     private const val HEIGHT = 28
+    private const val LINE = 9
+
+    /**
+     * Body lines a notice may grow to.
+     *
+     * One was too few. Half of what appears here is a refusal written by the
+     * backend — "you already have a pending request to that player" — and a
+     * single line meant `Ui.fit` cut it off with an ellipsis, reliably removing
+     * the half that said why. Two lines hold every message the backend actually
+     * sends; a third would start covering the screen underneath, which is the
+     * thing a notice must not do.
+     */
+    private const val MAX_BODY_LINES = 2
+
     private const val GAP = 3
     private const val MIN_WIDTH = 120
     private const val MAX_WIDTH = 200
@@ -203,6 +219,11 @@ object RankedNotice {
         lastFrameAt = now
         hoveredClose = null
 
+        // Slots are no longer a fixed pitch: a two-line notice is taller, so the
+        // one below it starts lower. Walked as a running total rather than
+        // index * HEIGHT, which is what a uniform stack could assume.
+        var slotY = top.toFloat()
+
         live.forEachIndexed { index, notice ->
             val elapsed = now - notice.startedAt
             val fade = when {
@@ -210,26 +231,33 @@ object RankedNotice {
                 elapsed > HOLD_MS -> 1f - ((elapsed - HOLD_MS).toFloat() / FADE_MS)
                 else -> 1f
             }.coerceIn(0f, 1f)
+            val maxWidth = (screenWidth / 2).coerceIn(MIN_WIDTH, MAX_WIDTH)
+            // The title shares its row with the dismiss button, so it is fitted
+            // to the shorter run rather than the full plate.
+            val bodyLines = bodyLines(font, notice.body, maxWidth - 16)
+            val title = Ui.fit(font, notice.title, maxWidth - 16 - CLOSE - 2)
+            val height = HEIGHT + (bodyLines.size - 1) * LINE
+
+            // Advanced whether or not this notice is drawn: a notice mid-fade
+            // still owns its slot, and skipping it would make the ones below
+            // jump up and back as it goes.
+            val mySlot = slotY
+            slotY += height + GAP
+
             if (fade <= 0f) {
                 notice.closeBox = null
                 return@forEachIndexed
             }
             val a = (fade * 255).toInt().coerceIn(0, 255)
 
-            val maxWidth = (screenWidth / 2).coerceIn(MIN_WIDTH, MAX_WIDTH)
-            // The title shares its row with the dismiss button, so it is fitted
-            // to the shorter run rather than the full plate.
-            val body = Ui.fit(font, notice.body, maxWidth - 16)
-            val title = Ui.fit(font, notice.title, maxWidth - 16 - CLOSE - 2)
-            val w = (maxOf(font.width(title) + CLOSE + 2, font.width(body)) + 20)
+            val w = (maxOf(font.width(title) + CLOSE + 2, bodyLines.maxOf { font.width(it) }) + 20)
                 .coerceIn(MIN_WIDTH.coerceAtMost(screenWidth - 8), maxWidth)
 
-            val slotY = (top + index * (HEIGHT + GAP)).toFloat()
             // A new notice starts at its slot; an existing one walks to the slot
             // it inherited when the notice above it expired.
             notice.drawnY = when {
-                notice.drawnY < 0f -> slotY
-                else -> approach(notice.drawnY, slotY, delta * SLIDE_PER_MS)
+                notice.drawnY < 0f -> mySlot
+                else -> approach(notice.drawnY, mySlot, delta * SLIDE_PER_MS)
             }
 
             // Slides in from off the right edge as it fades, so it reads as
@@ -237,11 +265,13 @@ object RankedNotice {
             val x = screenWidth - w - MARGIN + ((1f - fade) * 8).toInt()
             val y = notice.drawnY.toInt()
 
-            g.fill(x, y, x + w, y + HEIGHT, Ui.alpha(Ui.PANEL_BORDER, a))
-            g.fill(x + 1, y + 1, x + w - 1, y + HEIGHT - 1, Ui.alpha(Ui.PANEL_BG, a))
-            g.fill(x, y, x + 2, y + HEIGHT, Ui.alpha(notice.accent, a))
+            g.fill(x, y, x + w, y + height, Ui.alpha(Ui.PANEL_BORDER, a))
+            g.fill(x + 1, y + 1, x + w - 1, y + height - 1, Ui.alpha(Ui.PANEL_BG, a))
+            g.fill(x, y, x + 2, y + height, Ui.alpha(notice.accent, a))
             g.text(font, title, x + 8, y + 5, Ui.alpha(notice.accent, a))
-            g.text(font, body, x + 8, y + 16, Ui.alpha(Ui.WHITE, a))
+            for ((line, text) in bodyLines.withIndex()) {
+                g.text(font, text, x + 8, y + 16 + line * LINE, Ui.alpha(Ui.WHITE, a))
+            }
 
             // Dismiss button. Notices expire on their own, but "wait four
             // seconds" is not an answer for someone who wants the corner of
@@ -260,4 +290,29 @@ object RankedNotice {
 
     private fun approach(from: Float, to: Float, step: Float): Float =
         if (from < to) minOf(to, from + step) else maxOf(to, from - step)
+
+    /**
+     * The body as at most [MAX_BODY_LINES] lines that fit [maxWidth].
+     *
+     * Anything past the last line is ellipsised onto it, so a message longer
+     * than the notice can hold still ends in a way that says it was cut rather
+     * than simply stopping mid-word.
+     */
+    internal fun bodyLines(font: Font, body: String, maxWidth: Int): List<String> =
+        bodyLines(body, maxWidth, measure = { font.width(it) }, ellipsise = { s, w -> Ui.fit(font, s, w) })
+
+    /** [bodyLines] over a measuring function, so the arithmetic is testable. */
+    internal fun bodyLines(
+        body: String,
+        maxWidth: Int,
+        measure: (String) -> Int,
+        ellipsise: (String, Int) -> String,
+    ): List<String> {
+        val lines = Ui.wrap(body, maxWidth, measure, ellipsise)
+        if (lines.size <= MAX_BODY_LINES) return lines
+        val kept = lines.take(MAX_BODY_LINES).toMutableList()
+        val rest = lines.drop(MAX_BODY_LINES - 1).joinToString(" ")
+        kept[MAX_BODY_LINES - 1] = ellipsise(rest, maxWidth)
+        return kept
+    }
 }

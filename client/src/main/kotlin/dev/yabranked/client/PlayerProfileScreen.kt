@@ -23,6 +23,9 @@ class PlayerProfileScreen(
 ) : ScaledScreen(Component.literal("Player Profile")) {
 
     private var profile: Loadable<PlayerProfile> = Loadable.Loading
+
+    /** The way back from a failed read; see [dev.yabranked.client.ui.RetryCard]. */
+    private val retry = dev.yabranked.client.ui.RetryCard { load() }
     private var points: List<Ui.ChartPoint> = emptyList()
     private var history: List<MatchHistoryEntry> = emptyList()
     private var versus: VersusRecord? = null
@@ -66,29 +69,39 @@ class PlayerProfileScreen(
         // Load once per screen, not once per resize: init() re-runs on every
         // frame of a window drag, and a failed load left profile null, so the
         // old `profile == null` guard retried the whole fetch each time.
-        loaded.once {
-            val minecraft = this.minecraft
-            val self = RankedState.profile
-            YabRankedClient.workers.execute {
-                val fetched = backend.fetchProfile(uuid)
-                val hist = backend.fetchHistory(uuid, limit = 20).orElse(emptyList())
-                val achs = backend.fetchAchievements(uuid)
-                // Head-to-head only makes sense against someone other than you.
-                val h2h = if (self != null && self.uuid != uuid) {
-                    backend.fetchVersus(self.uuid, uuid)
-                } else null
-                minecraft.execute {
-                    history = hist
-                    achievements = achs
-                    // Casual matches carry the rating they were played at but
-                    // never moved it; charting them would draw flat runs that
-                    // look like the ladder stalled.
-                    points = hist.filter { it.rated && it.ratingAfter != null }
-                        .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
-                        .reversed()
-                    versus = h2h
-                    profile = fetched.toLoadable()
-                }
+        loaded.once { load() }
+    }
+
+    /**
+     * Fetch the profile and everything drawn under it. Split out of [layout] so
+     * a failed read has something for its Retry button to call — the
+     * once-per-screen guard stays in [layout], since a retry is a deliberate
+     * second attempt and a resize is not.
+     */
+    private fun load() {
+        val backend = RankedState.backend ?: return
+        val minecraft = this.minecraft
+        val self = RankedState.profile
+        profile = Loadable.Loading
+        YabRankedClient.workers.execute {
+            val fetched = backend.fetchProfile(uuid)
+            val hist = backend.fetchHistory(uuid, limit = 20).orElse(emptyList())
+            val achs = backend.fetchAchievements(uuid)
+            // Head-to-head only makes sense against someone other than you.
+            val h2h = if (self != null && self.uuid != uuid) {
+                backend.fetchVersus(self.uuid, uuid)
+            } else null
+            minecraft.execute {
+                history = hist
+                achievements = achs
+                // Casual matches carry the rating they were played at but
+                // never moved it; charting them would draw flat runs that
+                // look like the ladder stalled.
+                points = hist.filter { it.rated && it.ratingAfter != null }
+                    .map { Ui.ChartPoint(it.ratingAfter!!, it.completedAt) }
+                    .reversed()
+                versus = h2h
+                profile = fetched.toLoadable()
             }
         }
     }
@@ -108,7 +121,11 @@ class PlayerProfileScreen(
         val p = when (val state = profile) {
             is Loadable.Loaded -> state.value
             is Loadable.Pending -> {
-                Ui.messageCard(g, font, centerX, 66, state.message)
+                retry.draw(
+                    g, font, centerX, 66, state.message,
+                    retryable = state is Loadable.Failed,
+                    mouseX = mouseX, mouseY = mouseY,
+                )
                 Ui.fadeIn(g, width, height, openedAt)
                 return
             }
@@ -405,6 +422,7 @@ class PlayerProfileScreen(
 
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (super.onMouseClicked(event, doubled)) return true
+        if (retry.clicked(event.x(), event.y())) return true
         if (event.button() != 0 || chartTop < 0 || points.size < 2) return false
         val left = width / 2 - CARD_WIDTH / 2
         if (event.x() >= left && event.x() <= left + CARD_WIDTH &&

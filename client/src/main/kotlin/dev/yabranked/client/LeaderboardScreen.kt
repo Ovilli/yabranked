@@ -20,6 +20,11 @@ class LeaderboardScreen(
 
     private var entries: Loadable<List<PlayerProfile>> = Loadable.Loading
 
+    /** The way back from a failed read; see [dev.yabranked.client.ui.RetryCard]. */
+    private val retry = dev.yabranked.client.ui.RetryCard {
+        RankedState.backend?.let { load(it) }
+    }
+
     // Season being viewed; -1 until resolved from the backend / profile.
     private var season: Int = RankedState.profile?.season ?: -1
     private var currentSeason: Int = RankedState.profile?.season ?: -1
@@ -230,7 +235,11 @@ class LeaderboardScreen(
 
         val placeholder = entries.placeholder("No rated players in season $season")
         if (placeholder != null) {
-            Ui.messageCard(g, font, centerX, 66, placeholder)
+            retry.draw(
+                g, font, centerX, 66, placeholder,
+                retryable = entries is Loadable.Failed,
+                mouseX = mouseX, mouseY = mouseY,
+            )
             Ui.fadeIn(g, width, height, openedAt)
             return
         }
@@ -340,6 +349,7 @@ class LeaderboardScreen(
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (super.onMouseClicked(event, doubled)) return true
         if (event.button() != 0) return false
+        if (retry.clicked(event.x(), event.y())) return true
         val rows = rows()
         if (rows.isEmpty()) return false
 

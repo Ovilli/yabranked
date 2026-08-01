@@ -19,6 +19,9 @@ class MatchHistoryScreen(
 
     private var entries: Loadable<List<MatchHistoryEntry>> = Loadable.Loading
 
+    /** The way back from a failed read; see [dev.yabranked.client.ui.RetryCard]. */
+    private val retry = dev.yabranked.client.ui.RetryCard { load() }
+
     /** Y of the first row, set during render so click hit-testing matches it
      *  (it shifts down when the trend chart is shown). */
     private var rowsTop = TOP
@@ -70,15 +73,25 @@ class MatchHistoryScreen(
             return
         }
         // Once per screen, not once per resize — see PlayerProfileScreen.
-        loaded.once {
-            val minecraft = this.minecraft
-            YabRankedClient.workers.execute {
-                val fetched = backend.fetchHistory(profile.uuid, limit = 50)
-                minecraft.execute {
-                    entries = fetched.toLoadable()
-                    // A failed read leaves the streak alone rather than zeroing it.
-                    entries.valueOrNull?.let { RankedState.winStreak = RankedState.currentWinStreak(it) }
-                }
+        loaded.once { load() }
+    }
+
+    /**
+     * Fetch this player's history. Split out of [layout] so the retry on a
+     * failed read has something to call; the once-per-screen guard stays there,
+     * because a retry is a deliberate second attempt rather than a resize.
+     */
+    private fun load() {
+        val backend = RankedState.backend ?: return
+        val profile = RankedState.profile ?: return
+        val minecraft = this.minecraft
+        entries = Loadable.Loading
+        YabRankedClient.workers.execute {
+            val fetched = backend.fetchHistory(profile.uuid, limit = 50)
+            minecraft.execute {
+                entries = fetched.toLoadable()
+                // A failed read leaves the streak alone rather than zeroing it.
+                entries.valueOrNull?.let { RankedState.winStreak = RankedState.currentWinStreak(it) }
             }
         }
     }
@@ -112,7 +125,11 @@ class MatchHistoryScreen(
             // A first load gets row-shaped stubs instead of a line of text, so the
             // list's shape is on screen before its content is.
             if (entries is Loadable.Loading) drawLoadingSkeleton(g, centerX)
-            else Ui.messageCard(g, font, centerX, 74, placeholder)
+            else retry.draw(
+                g, font, centerX, 74, placeholder,
+                retryable = entries is Loadable.Failed,
+                mouseX = mouseX, mouseY = mouseY,
+            )
             Ui.fadeIn(g, width, height, openedAt)
             return
         }
@@ -261,6 +278,7 @@ class MatchHistoryScreen(
 
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
         if (super.onMouseClicked(event, doubled)) return true
+        if (retry.clicked(event.x(), event.y())) return true
         if (event.button() != 0) return false
         val shown = filtered(entries.valueOrNull ?: return false)
 

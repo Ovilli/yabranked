@@ -28,6 +28,13 @@ class ModeLeaderboardScreen(
 ) : ScaledScreen(Component.literal("Leaderboards")) {
 
     private var categories: Loadable<List<LeaderboardCategory>> = Loadable.Loading
+
+    /** The way back from a failed read; see [dev.yabranked.client.ui.RetryCard]. */
+    private val retry = dev.yabranked.client.ui.RetryCard {
+        // The categories decide which board is even asked for, so a retry starts
+        // from whichever of the two is missing.
+        if (categories is Loadable.Loaded) loadBoard() else loadCategories()
+    }
     private var board: Loadable<LeaderboardResponse> = Loadable.Loading
     private var index = 0
     private var scroll = 0
@@ -98,6 +105,7 @@ class ModeLeaderboardScreen(
     }
 
     override fun onMouseClicked(event: MouseButtonEvent, doubled: Boolean): Boolean {
+        if (retry.clicked(event.x(), event.y())) return true
         val rows = board.valueOrNull?.rows ?: return super.onMouseClicked(event, doubled)
         if (event.y() >= listTop && event.y() < listBottom) {
             val row = rows.getOrNull(((event.y().toInt() - listTop) / ROW) + scroll)
@@ -130,7 +138,16 @@ class ModeLeaderboardScreen(
 
         val rows = when (val state = board) {
             is Loadable.Pending -> {
-                g.centeredText(font, state.message, centerX, listTop + 20, Ui.TEXT_DIM)
+                // A failed board and a failed category list are the same dead end
+                // to the player, and the retry has to redo whichever broke.
+                // When the category list is what failed, the board is still
+                // "Loading…" and always will be — say what actually broke.
+                val message = (categories as? Loadable.Failed)?.message ?: state.message
+                retry.draw(
+                    g, font, centerX, listTop + 10, message,
+                    retryable = state is Loadable.Failed || categories is Loadable.Failed,
+                    mouseX = mouseX, mouseY = mouseY,
+                )
                 if (openedAt == 0L) openedAt = System.currentTimeMillis()
                 Ui.fadeIn(g, width, height, openedAt)
                 return
