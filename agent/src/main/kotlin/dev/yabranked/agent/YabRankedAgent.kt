@@ -42,6 +42,16 @@ class YabRankedAgent : DedicatedServerModInitializer {
          * worlds into a fresh lobby game. See [endSessionAndShutdown].
          */
         const val MAX_WIND_DOWN_SECONDS = 3L
+
+        /** How often the arrival/start deadlines are re-checked. */
+        const val CHECK_INTERVAL_SECONDS = 5L
+
+        /**
+         * Added to the no-show timeout for the "everyone is here but the game
+         * never started" deadline. Three minutes past the point where a match
+         * would otherwise be voided for a missing player.
+         */
+        const val START_GRACE_SECONDS = 180L
     }
 
     private lateinit var config: AgentConfig
@@ -51,6 +61,36 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
     private val phase = AtomicReference(Phase.CONFIGURING)
     private var noShowTimer: ScheduledFuture<*>? = null
+
+    /**
+     * Expected players who have connected at least once.
+     *
+     * The no-show rule is about arrival, and this is the only record of it. It
+     * used to be inferred from the phase — which moves to PLAYING when *YAB*
+     * starts the game, a different question entirely. On a CPU-limited container
+     * the gap between the two is over a minute: an observed match had both
+     * players on their teams for 80 seconds and was voided six seconds before
+     * the countdown ended, because a 60s spawn search plus a 10s chunk preload
+     * outlasted a 90s timer that had already been satisfied.
+     */
+    private val arrived = java.util.concurrent.ConcurrentHashMap.newKeySet<UUID>()
+
+    /** When the backend was told this server is ready; both deadlines run from it. */
+    private var readyAt: java.time.Instant = java.time.Instant.now()
+
+    /**
+     * How long everybody-is-here may fail to become a running game.
+     *
+     * Generous on purpose: what it has to cover is a slow container doing real
+     * work — YAB's spawn search runs to a 60s timeout of its own and the chunk
+     * preload after it is measured in tens of seconds. Anything short enough to
+     * feel responsive here would void matches that were about to start.
+     */
+    private val startDeadlineSeconds: Long get() = config.noShowTimeoutSeconds + START_GRACE_SECONDS
+
+    /** Expected players who are not connected right now. */
+    private fun missingPlayers(): List<AgentConfig.ExpectedPlayer> =
+        config.roster.filter { it.uuid !in arrived }
 
     /** Set when the agent decides the outcome itself (abandon/no-show). */
     private val forcedOutcome = AtomicReference<WireOutcome?>(null)
@@ -215,6 +255,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
             phase.set(Phase.WAITING_FOR_PLAYERS)
 
+            readyAt = java.time.Instant.now()
             if (reporter.reportReady()) {
                 log.info("[yabranked] reported ready for match ${config.matchId}")
             } else {
@@ -225,11 +266,14 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
             // Tell whoever did turn up what they are waiting for. Sitting alone in
             // a bingo lobby with no message is indistinguishable from a broken
-            // match server, which is what it was reported as.
+            // match server, which is what it was reported as. Only said while
+            // somebody is actually missing: telling a player their opponent has
+            // not connected, while that opponent stands next to them, is worse
+            // than saying nothing.
             for (at in listOf(15L, 45L)) {
                 if (config.noShowTimeoutSeconds > at) {
                     scheduler.schedule({
-                        if (phase.get() == Phase.WAITING_FOR_PLAYERS) {
+                        if (phase.get() == Phase.WAITING_FOR_PLAYERS && missingPlayers().isNotEmpty()) {
                             val left = config.noShowTimeoutSeconds - at
                             announce(
                                 server,
@@ -241,14 +285,39 @@ class YabRankedAgent : DedicatedServerModInitializer {
                 }
             }
 
-            noShowTimer = scheduler.schedule({
-                if (phase.get() == Phase.WAITING_FOR_PLAYERS) {
-                    log.warn("[yabranked] players did not arrive within ${config.noShowTimeoutSeconds}s; voiding match")
-                    announce(server, "§cYour opponent never connected. §7This match is void — no rating changes.")
-                    forcedOutcome.set(WireOutcome.VOID)
-                    reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+            // Two deadlines, because there are two failures and only one of them
+            // is anybody's fault:
+            //
+            // - Somebody never turned up. That is the no-show, and it is decided
+            //   by who has connected — not by whether YAB has got as far as
+            //   starting, which is a question about this container's CPU.
+            // - Everybody turned up and the game never started. That is a broken
+            //   match server, and it needs its own, longer deadline; without one
+            //   a game stuck in STARTING would hold both players forever, since
+            //   the orchestrator's reaper only ever looks at PENDING matches.
+            noShowTimer = scheduler.scheduleAtFixedRate({
+                if (phase.get() != Phase.WAITING_FOR_PLAYERS) return@scheduleAtFixedRate
+                val waited = java.time.Duration.between(readyAt, java.time.Instant.now()).seconds
+                val missing = missingPlayers()
+                when {
+                    missing.isNotEmpty() && waited >= config.noShowTimeoutSeconds -> {
+                        log.warn(
+                            "[yabranked] {} did not arrive within {}s; voiding match",
+                            missing.joinToString(", ") { it.name },
+                            config.noShowTimeoutSeconds,
+                        )
+                        announce(server, "§cYour opponent never connected. §7This match is void — no rating changes.")
+                        forcedOutcome.set(WireOutcome.VOID)
+                        reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+                    }
+                    missing.isEmpty() && waited >= startDeadlineSeconds -> {
+                        log.error("[yabranked] everyone connected but the game never started in ${waited}s; voiding")
+                        announce(server, "§cThis match server could not start the game. §7Void — no rating changes.")
+                        forcedOutcome.set(WireOutcome.VOID)
+                        reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+                    }
                 }
-            }, config.noShowTimeoutSeconds, TimeUnit.SECONDS)
+            }, CHECK_INTERVAL_SECONDS, CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS)
         }
     }
 
@@ -284,6 +353,10 @@ class YabRankedAgent : DedicatedServerModInitializer {
         // Recorded whatever the phase: a rejoin mid-match is exactly the kind of
         // gap in a movement track that otherwise looks unexplained.
         replay.mark(WireReplayEventType.JOIN, expected, detail = "${expected.name} joined")
+
+        // Arrival is what the no-show rule is about, so it is recorded the moment
+        // it happens rather than inferred later from the game's state.
+        arrived += uuid
 
         if (phase.get() != Phase.WAITING_FOR_PLAYERS) return
 
@@ -406,7 +479,15 @@ class YabRankedAgent : DedicatedServerModInitializer {
      */
     private fun onPlayerDisconnect(server: MinecraftServer, uuid: UUID) {
         val leaver = expectedPlayer(uuid) ?: return
-        if (phase.get() != Phase.PLAYING) return
+        if (phase.get() != Phase.PLAYING) {
+            // Gone again before the game started: they are missing once more, so
+            // the no-show deadline applies to them as if they had never arrived.
+            // Without this a player who connected and immediately quit would be
+            // counted as present forever, and the match would sit out the far
+            // longer "the game never started" deadline instead.
+            arrived -= uuid
+            return
+        }
 
         log.warn("[yabranked] ${leaver.name} disconnected mid-match; forfeiting immediately")
         replay.mark(WireReplayEventType.LEAVE, leaver, detail = "${leaver.name} left the match")
