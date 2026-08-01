@@ -1,0 +1,18 @@
+# Copy to /etc/cloudflared-yabranked/config.yml and substitute your own tunnel
+# id. `cloudflared tunnel create <name>` prints it and writes the matching
+# credentials JSON, which is the actual secret and must never be committed.
+#
+# Separate from the token-based cloudflared.service that serves AMP: that one is
+# managed from the Cloudflare dashboard and has live connections, and a shared
+# service would make either tunnel's restart an outage for the other.
+tunnel: REPLACE-WITH-YOUR-TUNNEL-ID
+credentials-file: /etc/cloudflared-yabranked/REPLACE-WITH-YOUR-TUNNEL-ID.json
+
+# This carries the API only. Minecraft is raw TCP and a Cloudflare Tunnel
+# proxies HTTP(S), so match servers cannot go through here — that is what the
+# playit tunnels and YABRANKED_PORT_MAP are for. Sending them through Cloudflare
+# needs Spectrum, which is enterprise.
+ingress:
+  - hostname: yabranked.example.com
+    service: http://localhost:8090
+  - service: http_status:404

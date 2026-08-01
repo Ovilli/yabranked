@@ -1,0 +1,14 @@
+[Unit]
+Description=cloudflared tunnel for yabranked.ovilli.de
+After=network-online.target yabranked-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared-yabranked/config.yml tunnel run
+Restart=on-failure
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

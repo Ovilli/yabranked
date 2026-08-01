@@ -53,6 +53,43 @@ Forward to the Pi's LAN address on the router:
 Minecraft speaks raw TCP directly to `host:port`, so the match ports cannot be
 put behind a proxy or an HTTP tunnel.
 
+### If you cannot forward ports
+
+Two tunnels, because no single one does both jobs. The API is HTTP and goes
+through a Cloudflare Tunnel; Minecraft is raw TCP and cannot, so match servers
+go through playit.gg. Putting the match ports through Cloudflare needs Spectrum,
+which is enterprise.
+
+**API — cloudflared.** `cloudflared tunnel create <name>` prints a tunnel id and
+writes a credentials JSON; that JSON is the secret and stays off the repo.
+
+```sh
+sudo mkdir -p /etc/cloudflared-yabranked
+sudo cp deploy/cloudflared/config.yml.example /etc/cloudflared-yabranked/config.yml
+sudo $EDITOR /etc/cloudflared-yabranked/config.yml     # tunnel id + hostname
+cloudflared tunnel route dns <name> <your hostname>
+sudo cp deploy/systemd/cloudflared-yabranked.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now cloudflared-yabranked
+```
+
+**Match servers — playit.gg.** The agent comes from its own apt repo and brings
+its own `playit.service`, so there is no unit here to copy — installing the
+package is the whole of it. Its secret lives in `/etc/playit/playit.toml`
+(`0600`, owned by `playit`) and is likewise not in the repo.
+
+Create one **Minecraft Java** tunnel per concurrent match you want, each
+forwarding to `127.0.0.1:2560N`, then list them in `YABRANKED_PORT_MAP`. That
+tunnel type publishes a `_minecraft._tcp` SRV record, which is why a bare
+hostname with no port works. Two things to know:
+
+- **The number of entries is the hard cap on concurrent matches.** Setting
+  `YABRANKED_PORT_MAP` replaces the port range entirely, so only mapped ports
+  are ever allocated.
+- **Verify a tunnel before trusting it.** Bind `nc -l 127.0.0.1 25600` on the
+  host and dial the public address from off-network. playit routes by edge IP
+  and port, so a mistyped name can still reach *somebody's* tunnel — see the
+  warning above `YABRANKED_PORT_MAP` in `.env.example`.
+
 ## 4. Up
 
 ```sh
