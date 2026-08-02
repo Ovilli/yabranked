@@ -28,6 +28,7 @@ What it can reach, and what that is worth knowing about:
 from __future__ import annotations
 
 import argparse
+import errno
 import getpass
 import hashlib
 import hmac
@@ -685,7 +686,14 @@ class Handler(BaseHTTPRequestHandler):
 
 def cmd_serve(args) -> None:
     cfg = load_config()
-    server = ThreadingHTTPServer((args.bind, args.port), Handler)
+    try:
+        server = ThreadingHTTPServer((args.bind, args.port), Handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        # Ordinary rather than exceptional: the @reboot line and a hand-start
+        # race every time the host comes up, and one of them has to lose.
+        sys.exit(f"port {args.port} is already in use — the console is likely already running")
     server.cfg = cfg  # type: ignore[attr-defined]
     server.throttle = Throttle()  # type: ignore[attr-defined]
     server.verbose = args.verbose  # type: ignore[attr-defined]
