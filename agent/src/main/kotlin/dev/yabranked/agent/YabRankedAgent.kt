@@ -51,7 +51,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
          * never started" deadline. Three minutes past the point where a match
          * would otherwise be voided for a missing player.
          */
-        const val START_GRACE_SECONDS = 180L
+        const val START_GRACE_SECONDS = VoidDeadlines.START_GRACE_SECONDS
     }
 
     private lateinit var config: AgentConfig
@@ -86,7 +86,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
      * preload after it is measured in tens of seconds. Anything short enough to
      * feel responsive here would void matches that were about to start.
      */
-    private val startDeadlineSeconds: Long get() = config.noShowTimeoutSeconds + START_GRACE_SECONDS
+    private val startDeadlineSeconds: Long get() = VoidDeadlines.startDeadlineSeconds(config.noShowTimeoutSeconds)
 
     /** Expected players who are not connected right now. */
     private fun missingPlayers(): List<AgentConfig.ExpectedPlayer> =
@@ -270,22 +270,20 @@ class YabRankedAgent : DedicatedServerModInitializer {
             // somebody is actually missing: telling a player their opponent has
             // not connected, while that opponent stands next to them, is worse
             // than saying nothing.
-            for (at in listOf(15L, 45L)) {
-                if (config.noShowTimeoutSeconds > at) {
-                    scheduler.schedule({
-                        if (phase.get() == Phase.WAITING_FOR_PLAYERS &&
-                            !startRequested.get() &&
-                            missingPlayers().isNotEmpty()
-                        ) {
-                            val left = config.noShowTimeoutSeconds - at
-                            announce(
-                                server,
-                                "§eWaiting for your opponent to connect… §7the match is voided in §e${left}s§7 " +
-                                    "if they do not.",
-                            )
-                        }
-                    }, at, TimeUnit.SECONDS)
-                }
+            for (at in VoidDeadlines.announcementOffsets(config.noShowTimeoutSeconds)) {
+                scheduler.schedule({
+                    if (phase.get() == Phase.WAITING_FOR_PLAYERS &&
+                        !startRequested.get() &&
+                        missingPlayers().isNotEmpty()
+                    ) {
+                        val left = config.noShowTimeoutSeconds - at
+                        announce(
+                            server,
+                            "§eWaiting for your opponent to connect… §7the match is voided in §e${left}s§7 " +
+                                "if they do not.",
+                        )
+                    }
+                }, at, TimeUnit.SECONDS)
             }
 
             // Two deadlines, because there are two failures and only one of them
@@ -302,28 +300,31 @@ class YabRankedAgent : DedicatedServerModInitializer {
                 if (phase.get() != Phase.WAITING_FOR_PLAYERS) return@scheduleAtFixedRate
                 val waited = java.time.Duration.between(readyAt, java.time.Instant.now()).seconds
                 val missing = missingPlayers()
-                when {
-                    // Nobody is a no-show once the game has been told to start:
-                    // everyone was here, on their teams, and YAB accepted the
-                    // start. Whatever a disconnect at that point means, it is not
-                    // "your opponent never connected" — and a match that was
-                    // mid-STARTING has the start deadline below to end it.
-                    missing.isNotEmpty() && !startRequested.get() &&
-                        waited >= config.noShowTimeoutSeconds -> {
+                // The decision itself is in [VoidDeadlines] so it can be tested
+                // without a container; everything below is only how it is said.
+                when (
+                    val decision = VoidDeadlines.evaluate(
+                        waitedSeconds = waited,
+                        missing = missing,
+                        startRequested = startRequested.get(),
+                        noShowTimeoutSeconds = config.noShowTimeoutSeconds,
+                        startDeadlineSeconds = startDeadlineSeconds,
+                    )
+                ) {
+                    VoidDecision.KeepWaiting -> Unit
+
+                    is VoidDecision.NoShow -> {
                         log.warn(
                             "[yabranked] {} did not arrive within {}s; voiding match",
-                            missing.joinToString(", ") { it.name },
+                            decision.missing.joinToString(", ") { it.name },
                             config.noShowTimeoutSeconds,
                         )
                         announce(server, "§cYour opponent never connected. §7This match is void — no rating changes.")
                         forcedOutcome.set(WireOutcome.VOID)
                         reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
                     }
-                    // Either everybody is here, or the start was already requested
-                    // and somebody has since dropped — both are "this match server
-                    // never got a game going", and both still have to end, since
-                    // the orchestrator's reaper only looks at PENDING matches.
-                    (missing.isEmpty() || startRequested.get()) && waited >= startDeadlineSeconds -> {
+
+                    VoidDecision.NeverStarted -> {
                         log.error(
                             "[yabranked] game never started in {}s (start requested: {}, present: [{}], missing: [{}]); voiding",
                             waited,

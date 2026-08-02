@@ -100,4 +100,47 @@ class ReplayStreamFileTest {
             assertEquals(0, it.endMillis)
         }
     }
+
+    /**
+     * The contract with the writer, written out as literals.
+     *
+     * `:agent`'s `ReplayStream` produces this format and **shares no code with
+     * this reader**: `MAGIC`, the format version, the 5-byte file header and the
+     * 9-byte frame header are each declared twice, once per module. Nothing
+     * fails at build time when they drift — the reader simply returns null for
+     * every stream and the player is told the match has no recording.
+     *
+     * Every other test here builds its fixture from `ReplayProtocol`, so it
+     * agrees with whatever that constant has become. This one is deliberately
+     * the opposite: change the version and it fails, which is the entire point.
+     * `:agent` cannot be built in CI (its YAB api dependency lives in a private
+     * registry), so this is the only half of the format CI can defend.
+     */
+    @Test
+    fun `the reader accepts exactly the bytes the agent writes`() {
+        val golden = byteArrayOf(
+            0x59, 0x41, 0x42, 0x52, // "YABR"
+            2, // format version
+            2, // frame: protocol PLAY
+            0x00, 0x00, 0x01, 0x2C, // millis since start = 300, big-endian
+            0x00, 0x00, 0x00, 0x03, // payload length = 3, big-endian
+            7, 8, 9, // payload
+        )
+
+        val stream = ReplayStreamFile.open(write(golden))
+            ?: error("the reader rejected the format the agent writes")
+        stream.use {
+            assertEquals(1, it.frameCount)
+            assertEquals(2.toByte(), it.protocolAt(0))
+            assertEquals(300, it.timeAt(0))
+            assertEquals(3, it.lengthAt(0))
+            val buffer = ByteArray(3)
+            assertEquals(3, it.payloadInto(0, buffer))
+            assertContentEquals(byteArrayOf(7, 8, 9), buffer)
+        }
+
+        assertEquals(2.toByte(), ReplayProtocol.FORMAT_VERSION, "bumping this orphans every recording in existence")
+        assertEquals(1.toByte(), ReplayProtocol.CONFIGURATION)
+        assertEquals(2.toByte(), ReplayProtocol.PLAY)
+    }
 }
