@@ -24,7 +24,7 @@ Match-server image (needs the YAB repo checked out at `../bingo`, override with 
 ./gradlew :agent:build && docker/fetch-mods.sh && docker build -t yabranked-match docker/
 ```
 
-`agent` depends on `me.jfenn.bingo:api` from **mavenLocal** — it will not compile until the YAB repo has published it.
+`agent` depends on `me.jfenn.bingo:api` from **mavenLocal**, and `settings.gradle.kts` leaves the module out of the build entirely until the YAB repo has published it — see [CI](#ci) for why that has to happen in `settings.gradle.kts` rather than by not asking for its tasks.
 
 ### Toolchains
 
@@ -34,7 +34,9 @@ It used to be `org.gradle.java.home` in `gradle.properties` pointing at an absol
 
 ### CI
 
-`.github/workflows/ci.yml` runs `:proto:test :backend:test` in one job and `:client:test` (Loom, so a Minecraft download) in another, plus a syntax gate on `deploy/admin/app.py`. **`agent` is deliberately not built**: it compiles against `me.jfenn.bingo:api` from mavenLocal, which the workflow has no YAB checkout to publish.
+`.github/workflows/ci.yml` runs `:proto:test :backend:test` in one job and `:client:test` (Loom, so a Minecraft download) in another, plus a syntax gate on `deploy/admin/app.py`.
+
+**`agent` is included by `settings.gradle.kts` only when `me.jfenn.bingo:api` is really in mavenLocal**, and that condition is not a convenience. Loom resolves that dependency at *configuration* time, and Gradle configures every project in a build whatever task was asked for — so on a machine without a YAB checkout the missing artifact failed `./gradlew :backend:test` and `./gradlew projects` too, with an error naming a module the caller never mentioned. Excluding it from the task list does nothing. The repo was unbuildable for anyone who had not published YAB first, which CI found by being the first such machine. `-PskipAgent=true` reproduces the trimmed build where the artifact *is* present; the cost of all this is that `./gradlew projects` is not the same everywhere.
 
 The runner having Docker is load-bearing — `PostgresStoreTest` `assumeTrue`-skips silently without it, so CI is the only place the SQL stores are exercised at all. A step after the tests reads the JUnit XML and raises a workflow warning if that class skipped, because a silent skip is indistinguishable from a pass.
 

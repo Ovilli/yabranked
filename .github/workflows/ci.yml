@@ -6,10 +6,12 @@
 # is what gates a change; `client` downloads Minecraft through Loom and is kept
 # separate so a backend failure is not buried under a game download.
 #
-# The `agent` module is deliberately absent. It compiles against
-# `me.jfenn.bingo:api` from **mavenLocal**, published by a checkout of the YAB
-# repository that this workflow does not have — see CLAUDE.md. Building it here
-# would mean vendoring or publishing that artifact first.
+# The `agent` module is absent, and leaving it out of the task list is not what
+# does that. Loom resolves its `me.jfenn.bingo:api` dependency at *configuration*
+# time and Gradle configures every project whatever task was asked for, so on a
+# machine without a YAB checkout the missing artifact failed `:backend:test`
+# too — which is how this workflow's first run failed. `settings.gradle.kts`
+# includes the module only when the artifact is really in mavenLocal.
 name: CI
 
 on:
