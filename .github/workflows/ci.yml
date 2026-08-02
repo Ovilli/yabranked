@@ -1,0 +1,116 @@
+# There was no CI at all before this: fifty test classes that only ever ran when
+# somebody remembered to, on one machine whose absolute JDK path was pinned in
+# `gradle.properties`. Regressions were found by playing a match on the Pi.
+#
+# Two jobs, because they cost very different amounts. `test` is the fast one and
+# is what gates a change; `client` downloads Minecraft through Loom and is kept
+# separate so a backend failure is not buried under a game download.
+#
+# The `agent` module is deliberately absent. It compiles against
+# `me.jfenn.bingo:api` from **mavenLocal**, published by a checkout of the YAB
+# repository that this workflow does not have — see CLAUDE.md. Building it here
+# would mean vendoring or publishing that artifact first.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: proto + backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Java 25 for the Gradle daemon itself, which MC 26.2's Loom requires of
+      # the whole build. gradle/gradle-daemon-jvm.properties would otherwise
+      # have the daemon download its own copy on every run.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # PostgresStoreTest starts postgres:16-alpine itself with `docker run` and
+      # assumeTrue-skips when Docker is absent — which is every developer
+      # machine without it. The runner has Docker, so this is the only place
+      # the SQL stores are actually exercised.
+      - run: ./gradlew :proto:test :backend:test
+
+      - name: Say whether the Postgres tests really ran
+        if: always()
+        run: |
+          report=backend/build/test-results/test/TEST-dev.yabranked.backend.store.PostgresStoreTest.xml
+          if [ ! -f "$report" ]; then
+            echo "::warning::PostgresStoreTest produced no results — the SQL stores were not covered"
+          elif grep -q '<skipped' "$report"; then
+            echo "::warning::PostgresStoreTest skipped: Docker was unavailable, so no SQL path was covered"
+          else
+            echo "PostgresStoreTest ran against a real Postgres"
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: backend-test-report
+          path: |
+            backend/build/reports/tests/test
+            proto/build/reports/tests/test
+          retention-days: 7
+
+  client:
+    name: client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      # Loom's Minecraft downloads and its remapped jars are not in the Gradle
+      # caches the action restores, and re-downloading 26.2 every run is most of
+      # this job's wall time.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.gradle/caches/fabric-loom
+            ~/.gradle/caches/modules-2/files-2.1/com.mojang
+          key: loom-${{ runner.os }}-${{ hashFiles('client/build.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: loom-${{ runner.os }}-
+
+      - run: ./gradlew :client:test
+
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: client-test-report
+          path: client/build/reports/tests/test
+          retention-days: 7
+
+  admin-console:
+    name: admin console
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      # Stdlib only and no test suite, so this is a syntax gate rather than a
+      # test — but the console is deployed by `scp`ing this one file, and a
+      # SyntaxError in it is discovered on the host otherwise.
+      - run: python3 -m compileall -q deploy/admin/app.py
