@@ -1,8 +1,7 @@
 package dev.yabranked.agent
 
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import dev.yabranked.proto.MatchReplayMeta
+import dev.yabranked.proto.MatchResultReport
 import org.slf4j.Logger
 import java.net.URI
 import java.net.http.HttpClient
@@ -10,59 +9,23 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 
-/**
- * Wire format for result reports. Mirrors dev.yabranked.proto.MatchResultReport /
- * MatchOutcome.
+/*
+ * The result report and the replay index are `:proto`'s own types now, not
+ * copies of them.
  *
- * The reason given here used to be that proto "can't be nested into a Fabric mod
- * jar without repackaging". That is no longer true and has not been for a while:
- * `:client` flattens proto's classes into its jar rather than nesting them, and
- * `:agent` now does the same via `bundledCore`, which is how `MatchRules` stopped
- * being a copy. These two are still copies only because they sit on the settle
- * path — if their encoding is wrong, matches do not settle — so replacing them is
- * a change worth making deliberately rather than as a side effect.
- *
- * Until then the field names and @SerialName values are the contract: change one
- * here and you must change it in `:proto` too.
+ * They used to be `WireResultReport`/`WireOutcome` here, under a comment saying
+ * proto "can't be nested into a Fabric mod jar without repackaging" — which
+ * stopped being true when `:client` solved it by flattening proto's classes
+ * instead of nesting them, and left one wire contract with two declarations that
+ * had to be edited together. The backend has always decoded these with proto's
+ * serializers, so the copies were only ever a second opinion about a shape
+ * somebody else owned.
  */
-@Serializable
-enum class WireOutcome {
-    @SerialName("team_a")
-    TEAM_A_WIN,
-
-    @SerialName("team_b")
-    TEAM_B_WIN,
-
-    @SerialName("draw")
-    DRAW,
-
-    @SerialName("void")
-    VOID,
-}
-
-@Serializable
-data class WireResultReport(
-    val matchId: String,
-    val outcome: WireOutcome,
-    val durationSeconds: Long,
-    val teamAScore: Int,
-    val teamBScore: Int,
-    /** UUID of the player who forfeited (concede or no-show), null for a normal finish. */
-    val forfeitedBy: String? = null,
-    /**
-     * Winning side index for matches with more than two sides. Null on a
-     * two-side match, where [outcome] already says it.
-     */
-    val winningTeam: Int? = null,
-    /** Side-ordered final scores, for matches with more than two sides. */
-    val teamScores: List<Int> = emptyList(),
-)
-
 class BackendReporter(
     private val config: AgentConfig,
     private val log: Logger,
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = AgentJson
     private val http = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build()
@@ -112,8 +75,8 @@ class BackendReporter(
         post("/v1/internal/matches/ready", """{"matchId":"${config.matchId}"}""")
 
     /** Report the final result; retries a few times since this write matters. */
-    fun reportResult(report: WireResultReport): Boolean {
-        val body = json.encodeToString(WireResultReport.serializer(), report)
+    fun reportResult(report: MatchResultReport): Boolean {
+        val body = json.encodeToString(MatchResultReport.serializer(), report)
         repeat(3) { attempt ->
             val status = postStatus("/v1/internal/matches/result", body)
             if (status in 200..299) return true
@@ -169,8 +132,8 @@ class BackendReporter(
      * inside that budget: a replay is a nice thing to have and the result is the
      * thing that must land. It is small — the packets went up during the match.
      */
-    fun reportReplayMeta(meta: WireMatchReplayMeta, complete: Boolean): Boolean {
-        val body = json.encodeToString(WireMatchReplayMeta.serializer(), meta)
+    fun reportReplayMeta(meta: MatchReplayMeta, complete: Boolean): Boolean {
+        val body = json.encodeToString(MatchReplayMeta.serializer(), meta)
         return post(
             "/v1/internal/matches/${config.matchId}/replay?complete=$complete",
             body,

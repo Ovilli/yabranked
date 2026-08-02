@@ -1,5 +1,6 @@
 package dev.yabranked.agent
 
+import dev.yabranked.proto.MatchReplayMeta
 import org.slf4j.Logger
 
 /**
@@ -34,7 +35,7 @@ class ReplayUploader(
      */
     private val append: (index: Int, offset: Long, bytes: ByteArray) -> Long?,
     /** Writes the recording's index. [complete] marks the recording finished. */
-    private val putMeta: (meta: WireMatchReplayMeta, complete: Boolean) -> Boolean,
+    private val putMeta: (meta: MatchReplayMeta, complete: Boolean) -> Boolean,
     /** How much is sent per request. */
     private val chunkBytes: Int = DEFAULT_CHUNK_BYTES,
 ) {
@@ -73,13 +74,13 @@ class ReplayUploader(
      * complete. Returns whether the index landed — the streams are worth nothing
      * without it, since it is what says which bytes belong to whom.
      */
-    fun finish(streams: List<ReplayStream>, meta: WireMatchReplayMeta): Boolean {
+    fun finish(streams: List<ReplayStream>, meta: MatchReplayMeta): Boolean {
         pump(streams)
         return putMeta(meta, true)
     }
 
     /** Write the index mid-match, so a partial recording is already playable. */
-    fun checkpoint(streams: List<ReplayStream>, meta: WireMatchReplayMeta) {
+    fun checkpoint(streams: List<ReplayStream>, meta: MatchReplayMeta) {
         pump(streams)
         putMeta(meta, false)
     }

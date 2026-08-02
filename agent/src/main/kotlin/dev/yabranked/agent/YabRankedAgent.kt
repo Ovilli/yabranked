@@ -1,5 +1,9 @@
 package dev.yabranked.agent
 
+import dev.yabranked.proto.MatchOutcome
+import dev.yabranked.proto.MatchReplayMeta
+import dev.yabranked.proto.MatchResultReport
+import dev.yabranked.proto.ReplayEventType
 import me.jfenn.bingo.api.BingoApi
 import me.jfenn.bingo.api.BingoEvents
 import me.jfenn.bingo.api.event.GameEndedEvent
@@ -93,7 +97,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
         config.roster.filter { it.uuid !in arrived }
 
     /** Set when the agent decides the outcome itself (abandon/no-show). */
-    private val forcedOutcome = AtomicReference<WireOutcome?>(null)
+    private val forcedOutcome = AtomicReference<MatchOutcome?>(null)
 
     /** UUID of the player who forfeited (concede or no-show); null for a clean finish. */
     private val forfeiter = AtomicReference<UUID?>(null)
@@ -220,8 +224,8 @@ class YabRankedAgent : DedicatedServerModInitializer {
     private fun configureWithRetry(server: MinecraftServer, attempt: Int) {
         if (attempt > MAX_CONFIG_ATTEMPTS) {
             log.error("[yabranked] could not configure YAB after $MAX_CONFIG_ATTEMPTS attempts; voiding match")
-            forcedOutcome.set(WireOutcome.VOID)
-            reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+            forcedOutcome.set(MatchOutcome.VOID)
+            reportAndShutdown(server, MatchOutcome.VOID, durationSeconds = 0)
             return
         }
 
@@ -320,8 +324,8 @@ class YabRankedAgent : DedicatedServerModInitializer {
                             config.noShowTimeoutSeconds,
                         )
                         announce(server, "§cYour opponent never connected. §7This match is void — no rating changes.")
-                        forcedOutcome.set(WireOutcome.VOID)
-                        reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+                        forcedOutcome.set(MatchOutcome.VOID)
+                        reportAndShutdown(server, MatchOutcome.VOID, durationSeconds = 0)
                     }
 
                     VoidDecision.NeverStarted -> {
@@ -333,8 +337,8 @@ class YabRankedAgent : DedicatedServerModInitializer {
                             missing.joinToString(", ") { it.name },
                         )
                         announce(server, "§cThis match server could not start the game. §7Void — no rating changes.")
-                        forcedOutcome.set(WireOutcome.VOID)
-                        reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+                        forcedOutcome.set(MatchOutcome.VOID)
+                        reportAndShutdown(server, MatchOutcome.VOID, durationSeconds = 0)
                     }
                 }
             }, CHECK_INTERVAL_SECONDS, CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS)
@@ -353,10 +357,10 @@ class YabRankedAgent : DedicatedServerModInitializer {
      * cannot, so [winningSide] is what the backend reads there. Both are set
      * together so the record and the ladder always agree.
      */
-    private fun defeatOf(side: Int): WireOutcome = when {
-        config.teams.size > 2 -> WireOutcome.TEAM_A_WIN
-        side == 0 -> WireOutcome.TEAM_B_WIN
-        else -> WireOutcome.TEAM_A_WIN
+    private fun defeatOf(side: Int): MatchOutcome = when {
+        config.teams.size > 2 -> MatchOutcome.TEAM_A_WIN
+        side == 0 -> MatchOutcome.TEAM_B_WIN
+        else -> MatchOutcome.TEAM_A_WIN
     }
 
     private fun onPlayerJoin(server: MinecraftServer, uuid: UUID, name: String) {
@@ -372,7 +376,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
 
         // Recorded whatever the phase: a rejoin mid-match is exactly the kind of
         // gap in a movement track that otherwise looks unexplained.
-        replay.mark(WireReplayEventType.JOIN, expected, detail = "${expected.name} joined")
+        replay.mark(ReplayEventType.JOIN, expected, detail = "${expected.name} joined")
 
         // Arrival is what the no-show rule is about, so it is recorded the moment
         // it happens rather than inferred later from the game's state.
@@ -392,8 +396,8 @@ class YabRankedAgent : DedicatedServerModInitializer {
     private fun assignTeam(server: MinecraftServer, player: AgentConfig.ExpectedPlayer, team: String, attempt: Int) {
         if (attempt > MAX_ASSIGN_ATTEMPTS) {
             log.error("[yabranked] could not assign ${player.name} to $team; voiding match")
-            forcedOutcome.set(WireOutcome.VOID)
-            reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+            forcedOutcome.set(MatchOutcome.VOID)
+            reportAndShutdown(server, MatchOutcome.VOID, durationSeconds = 0)
             return
         }
 
@@ -427,8 +431,8 @@ class YabRankedAgent : DedicatedServerModInitializer {
     private fun startGame(server: MinecraftServer, attempt: Int) {
         if (attempt > MAX_START_ATTEMPTS) {
             log.error("[yabranked] could not start the game; voiding match")
-            forcedOutcome.set(WireOutcome.VOID)
-            reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
+            forcedOutcome.set(MatchOutcome.VOID)
+            reportAndShutdown(server, MatchOutcome.VOID, durationSeconds = 0)
             return
         }
         server.execute {
@@ -468,7 +472,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
                             val winnerNames = winners.joinToString(", ") { it.name }
                             log.warn("[yabranked] ${expected.name} forfeited; $winnerNames win")
                             replay.mark(
-                                WireReplayEventType.FORFEIT, expected,
+                                ReplayEventType.FORFEIT, expected,
                                 detail = "${expected.name} conceded",
                             )
                             forfeiter.set(expected.uuid)
@@ -525,7 +529,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
         }
 
         log.warn("[yabranked] ${leaver.name} disconnected mid-match; forfeiting immediately")
-        replay.mark(WireReplayEventType.LEAVE, leaver, detail = "${leaver.name} left the match")
+        replay.mark(ReplayEventType.LEAVE, leaver, detail = "${leaver.name} left the match")
         resolveAbandon(server, uuid, leaver.name)
     }
 
@@ -548,7 +552,7 @@ class YabRankedAgent : DedicatedServerModInitializer {
         val winner = standing.singleOrNull()
         if (winner == null || winner == leaverSide) {
             log.warn("[yabranked] nobody left to award the win to; voiding match")
-            forcedOutcome.set(WireOutcome.VOID)
+            forcedOutcome.set(MatchOutcome.VOID)
         } else {
             val winnerNames = config.teams[winner].joinToString(", ") { it.name }
             log.warn("[yabranked] $name left the match; $winnerNames win by forfeit")
@@ -584,9 +588,9 @@ class YabRankedAgent : DedicatedServerModInitializer {
             val side = config.teams.indices.firstOrNull { index ->
                 config.teams[index].any { it.uuid in winnerPlayers }
             }
-            if (side == null) WireOutcome.DRAW else {
+            if (side == null) MatchOutcome.DRAW else {
                 winningSide.set(side)
-                if (side == 0) WireOutcome.TEAM_A_WIN else WireOutcome.TEAM_B_WIN
+                if (side == 0) MatchOutcome.TEAM_A_WIN else MatchOutcome.TEAM_B_WIN
             }
         }
 
@@ -597,11 +601,11 @@ class YabRankedAgent : DedicatedServerModInitializer {
         )
     }
 
-    private fun reportAndShutdown(server: MinecraftServer, outcome: WireOutcome, durationSeconds: Long) {
+    private fun reportAndShutdown(server: MinecraftServer, outcome: MatchOutcome, durationSeconds: Long) {
         replay.stop()
-        replay.mark(WireReplayEventType.GAME_END, detail = "Match ended: $outcome")
+        replay.mark(ReplayEventType.GAME_END, detail = "Match ended: $outcome")
         val recording = replay.build(durationSeconds)
-        val report = WireResultReport(
+        val report = MatchResultReport(
             matchId = config.matchId,
             outcome = outcome,
             durationSeconds = durationSeconds,

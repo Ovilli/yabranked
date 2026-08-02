@@ -1,7 +1,14 @@
 package dev.yabranked.agent
 
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
+import dev.yabranked.proto.MatchReplayMeta
+import dev.yabranked.proto.PlayerRef
+import dev.yabranked.proto.ReplayBoard
+import dev.yabranked.proto.ReplayCell
+import dev.yabranked.proto.ReplayEvent
+import dev.yabranked.proto.ReplayEventType
+import dev.yabranked.proto.ReplayPose
+import dev.yabranked.proto.ReplayStreamInfo
+import dev.yabranked.proto.ReplayTrack
 import me.jfenn.bingo.api.BingoApi
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.network.ServerConfigurationPacketListenerImpl
@@ -11,111 +18,6 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
-
-/*
- * Wire mirrors of dev.yabranked.proto's replay types. Same standing as
- * [WireResultReport]: proto *is* reachable from this module now — it is
- * flattened into the mod jar by `bundledCore`, which is what let `MatchRules`
- * become the shared class — and these are still copies only because nobody has
- * done the swap deliberately. Field names remain the contract: change one here
- * and you must change it there.
- */
-
-@Serializable
-data class WirePlayerRef(val uuid: String, val name: String, val country: String? = null)
-
-@Serializable
-data class WireReplayCell(
-    val index: Int,
-    val objectiveId: String,
-    val tier: String = "",
-    val claimedBy: WirePlayerRef? = null,
-    val claimedByTeam: Int? = null,
-    val claimedAtSeconds: Long? = null,
-)
-
-@Serializable
-data class WireReplayBoard(
-    val size: Int = 5,
-    val cells: List<WireReplayCell> = emptyList(),
-    val cardSeed: Long? = null,
-)
-
-@Serializable
-enum class WireReplayEventType {
-    @SerialName("GAME_START") GAME_START,
-    @SerialName("CLAIM") CLAIM,
-    @SerialName("DEATH") DEATH,
-    @SerialName("JOIN") JOIN,
-    @SerialName("LEAVE") LEAVE,
-    @SerialName("FORFEIT") FORFEIT,
-    @SerialName("GAME_END") GAME_END,
-    @SerialName("NOTE") NOTE,
-}
-
-@Serializable
-data class WireReplayEvent(
-    val atSeconds: Long,
-    val type: WireReplayEventType,
-    val player: WirePlayerRef? = null,
-    val team: Int? = null,
-    val cell: Int? = null,
-    val detail: String = "",
-)
-
-@Serializable
-data class WireReplayPose(
-    val atMillis: Int,
-    val x: Double,
-    val y: Double,
-    val z: Double,
-    val yaw: Float = 0f,
-    val pitch: Float = 0f,
-    val dimension: String = "",
-)
-
-@Serializable
-data class WireReplayTrack(
-    val player: WirePlayerRef,
-    val team: Int = 0,
-    val poses: List<WireReplayPose> = emptyList(),
-)
-
-@Serializable
-data class WireReplayStreamInfo(
-    val index: Int,
-    val player: WirePlayerRef,
-    val team: Int = 0,
-    val sizeBytes: Long = 0,
-    val packetCount: Long = 0,
-    val startMillis: Long = 0,
-    val endMillis: Long = 0,
-    val truncated: Boolean = false,
-)
-
-/**
- * The recording's index. The packets themselves go up separately, as bytes; see
- * [ReplayUploader].
- *
- * `format` is deliberately absent: the backend knows the format from the match
- * row it is already looking up to check the token, and a container repeating it
- * would only create a second answer that could disagree.
- */
-@Serializable
-data class WireMatchReplayMeta(
-    val matchId: String,
-    val startedAt: Long = 0,
-    val durationSeconds: Long = 0,
-    val recordedFrom: Long = 0,
-    val gameStartMillis: Long = 0,
-    val board: WireReplayBoard = WireReplayBoard(),
-    val events: List<WireReplayEvent> = emptyList(),
-    val streams: List<WireReplayStreamInfo> = emptyList(),
-    val tracks: List<WireReplayTrack> = emptyList(),
-    val gameVersion: String = "",
-    val protocolVersion: Int = 0,
-    val version: Int = 2,
-)
 
 /**
  * Records a match so it can be walked back through inside the game.
@@ -157,13 +59,13 @@ class ReplayRecorder(
      */
     private val checkpointSeconds: Long = 60,
 ) {
-    private val events = java.util.Collections.synchronizedList(mutableListOf<WireReplayEvent>())
+    private val events = java.util.Collections.synchronizedList(mutableListOf<ReplayEvent>())
 
     /** Cell index -> the claim already recorded for it, so a claim is dated once. */
-    private val claimed = ConcurrentHashMap<Int, WireReplayCell>()
+    private val claimed = ConcurrentHashMap<Int, ReplayCell>()
 
     /** Board as read at the start; claims are merged onto it when reporting. */
-    @Volatile private var board: WireReplayBoard = WireReplayBoard()
+    @Volatile private var board: ReplayBoard = ReplayBoard()
 
     /** Wall-clock ms the game started; 0 while it has not. */
     @Volatile private var startedAtMs = 0L
@@ -178,7 +80,7 @@ class ReplayRecorder(
      * these are drawn alongside packet frames, and two clocks that disagree by the
      * length of the lobby put a player's body where they were a minute ago.
      */
-    private val poses = ConcurrentHashMap<UUID, MutableList<WireReplayPose>>()
+    private val poses = ConcurrentHashMap<UUID, MutableList<ReplayPose>>()
 
     @Volatile private var gameVersion = ""
     @Volatile private var protocolVersion = 0
@@ -207,7 +109,7 @@ class ReplayRecorder(
         if (startedAtMs == 0L) 0 else (System.currentTimeMillis() - startedAtMs) / 1000
 
     private fun refOf(player: AgentConfig.ExpectedPlayer) =
-        WirePlayerRef(player.uuid.toString(), player.name)
+        PlayerRef(player.uuid.toString(), player.name)
 
     /**
      * Begin capturing a player's packets.
@@ -230,7 +132,7 @@ class ReplayRecorder(
         gameVersion = runCatching { server.serverVersion }.getOrDefault("")
         protocolVersion = runCatching { net.minecraft.SharedConstants.getProtocolVersion() }.getOrDefault(0)
         readBoard(server)
-        mark(WireReplayEventType.GAME_START, detail = "Match started")
+        mark(ReplayEventType.GAME_START, detail = "Match started")
         poller = scheduler.scheduleAtFixedRate(
             { runCatching { poll(server) }.onFailure { log.warn("[yabranked] replay poll failed", it) } },
             INTERVAL_SECONDS,
@@ -294,7 +196,7 @@ class ReplayRecorder(
      * Upload the finished recording, behind any checkpoint still in flight, and
      * stop uploading afterwards. Blocks, so call it off the server thread.
      */
-    fun flush(meta: WireMatchReplayMeta): Boolean = try {
+    fun flush(meta: MatchReplayMeta): Boolean = try {
         // The tap is closed first so the last frames are on disk before the
         // uploader reads the tail it is about to call final.
         tap.close()
@@ -308,12 +210,12 @@ class ReplayRecorder(
 
     /** Note something the poller cannot see, e.g. a concession or a disconnect. */
     fun mark(
-        type: WireReplayEventType,
+        type: ReplayEventType,
         player: AgentConfig.ExpectedPlayer? = null,
         cell: Int? = null,
         detail: String = "",
     ) {
-        events += WireReplayEvent(
+        events += ReplayEvent(
             atSeconds = now(),
             type = type,
             player = player?.let(::refOf),
@@ -328,13 +230,13 @@ class ReplayRecorder(
      * never started has a card and no story, and uploading an empty file for it
      * only costs the retention sweep work.
      */
-    fun build(durationSeconds: Long): WireMatchReplayMeta? {
+    fun build(durationSeconds: Long): MatchReplayMeta? {
         if (startedAtMs == 0L || !tap.isCapturing) return null
         // Claims are merged in at the end rather than mutated in place: the
         // board read at the start is the objective list, and `claimed` is what
         // the poll discovered about it.
         val cells = board.cells.map { cell -> claimed[cell.index] ?: cell }
-        return WireMatchReplayMeta(
+        return MatchReplayMeta(
             matchId = config.matchId,
             startedAt = startedAtMs / 1000,
             durationSeconds = durationSeconds,
@@ -343,7 +245,7 @@ class ReplayRecorder(
             board = board.copy(cells = cells),
             events = synchronized(events) { events.toList() }.sortedBy { it.atSeconds },
             streams = tap.streamsInOrder().map { stream ->
-                WireReplayStreamInfo(
+                ReplayStreamInfo(
                     index = stream.index,
                     player = refOf(stream.player),
                     team = stream.team,
@@ -356,7 +258,7 @@ class ReplayRecorder(
             },
             tracks = config.teams.flatMapIndexed { side, roster ->
                 roster.map { player ->
-                    WireReplayTrack(player = refOf(player), team = side, poses = posesOf(player.uuid))
+                    ReplayTrack(player = refOf(player), team = side, poses = posesOf(player.uuid))
                 }
             }.filter { it.poses.isNotEmpty() },
             gameVersion = gameVersion,
@@ -387,7 +289,7 @@ class ReplayRecorder(
                     for (col in 0 until SIZE) {
                         val objective = runCatching { card.objective(col, row) }.getOrNull() ?: continue
                         add(
-                            WireReplayCell(
+                            ReplayCell(
                                 index = row * SIZE + col,
                                 objectiveId = objective.objectiveId,
                                 tier = objective.objectiveTier?.name.orEmpty(),
@@ -396,7 +298,7 @@ class ReplayRecorder(
                     }
                 }
             }
-            board = WireReplayBoard(size = SIZE, cells = cells, cardSeed = runCatching { card.seed }.getOrNull())
+            board = ReplayBoard(size = SIZE, cells = cells, cardSeed = runCatching { card.seed }.getOrNull())
         }
     }
 
@@ -429,7 +331,7 @@ class ReplayRecorder(
             val expected = config.playerOf(online.uuid) ?: continue
             poses.getOrPut(expected.uuid) { java.util.Collections.synchronizedList(mutableListOf()) }
                 .add(
-                    WireReplayPose(
+                    ReplayPose(
                         atMillis = at,
                         x = online.x,
                         y = online.y,
@@ -445,7 +347,7 @@ class ReplayRecorder(
 
     /** One player's track, copied under the list's own monitor — a checkpoint reads
      *  these while the server thread is still appending to them. */
-    private fun posesOf(player: UUID): List<WireReplayPose> {
+    private fun posesOf(player: UUID): List<ReplayPose> {
         val track = poses[player] ?: return emptyList()
         return synchronized(track) { track.toList() }
     }
@@ -462,7 +364,7 @@ class ReplayRecorder(
             val health = online.health.toInt()
             val previous = lastHealth.put(expected.uuid, health)
             if (previous != null && previous > 0 && health <= 0) {
-                mark(WireReplayEventType.DEATH, expected, detail = "${expected.name} died")
+                mark(ReplayEventType.DEATH, expected, detail = "${expected.name} died")
             }
         }
     }
@@ -490,7 +392,7 @@ class ReplayRecorder(
             )
             claimed[cell.index] = record
             mark(
-                WireReplayEventType.CLAIM,
+                ReplayEventType.CLAIM,
                 owner,
                 cell = cell.index,
                 detail = "${owner.name} claimed ${cell.objectiveId.substringAfter(':')}",
