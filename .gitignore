@@ -14,3 +14,7 @@ client/run2/
 # local YABRANKED_REPLAY_DIR — packet captures, tens of MB per match
 .replays/
 .tokensave
+
+# deployment address, not for a public repo
+deploy/.host
+__pycache__/
