@@ -103,6 +103,64 @@ object ReplayViewer {
         // moment rather than being a tick apart.
         ghosts?.tick(playback.positionMillis)
         reattachCamera()
+        closeStaleContainer()
+    }
+
+    /** Container the recording currently has open, or 0 for none. */
+    private var openContainerId = 0
+
+    /** `inventoryMenu.stateId` when [openContainerId] was opened; see below. */
+    private var inventoryStateAtOpen = 0
+
+    /**
+     * Shut a container screen the recording has finished with.
+     *
+     * **Closing a container is serverbound only.** `ClientboundOpenScreenPacket`
+     * puts the viewer in the recorded player's chest or crafting table, but when
+     * that player pressed Escape their client sent `ServerboundContainerClosePacket`
+     * and the server answered with nothing — `ServerPlayer.doCloseContainer` sends
+     * no packet, unlike the server-initiated `closeContainer` which does. So the
+     * stream contains the opening and cannot contain the closing, and the viewer
+     * was left sitting in a crafting grid for the rest of the match.
+     *
+     * What stands in for the packet that does not exist is that **the server goes
+     * back to addressing container 0**. While a container is open the server
+     * broadcasts changes for *that* menu; only once it is closed does the player's
+     * own inventory become the thing being updated again. A container-0 update
+     * lands via `handleContainerContent`, which bumps `inventoryMenu`'s state id —
+     * so that id moving while another container is open is the close, observed one
+     * step downstream.
+     *
+     * The open container is read from the menu rather than from the screen because
+     * this mapping exposes no current screen, and it is the better question anyway:
+     * `InventoryMenu` is the one with container id 0, so a non-zero id *is* "some
+     * other container is open", with no screen class to match against.
+     *
+     * `clientSideCloseContainer` is the same call vanilla makes when the server
+     * *does* say close, so the client ends up in the state it would have been in
+     * had the packet existed.
+     *
+     * A backwards seek needs nothing here: it tears the world down, and
+     * `ReplayPlayback.teardown` disconnects through a screen of its own, so a
+     * container screen cannot outlive the level it was opened in. Whatever the
+     * re-fed frames open on the way back to the target is then the truth again.
+     */
+    private fun closeStaleContainer() {
+        val player = Minecraft.getInstance().player ?: return
+        val id = player.containerMenu.containerId
+        if (id == 0) {
+            openContainerId = 0
+            return
+        }
+        if (id != openContainerId) {
+            openContainerId = id
+            inventoryStateAtOpen = player.inventoryMenu.stateId
+            return
+        }
+        if (player.inventoryMenu.stateId != inventoryStateAtOpen) {
+            openContainerId = 0
+            player.clientSideCloseContainer()
+        }
     }
 
     /**
@@ -129,14 +187,6 @@ object ReplayViewer {
     /** Whether this recording carries the tracks that bodies are drawn from. */
     val hasBodies: Boolean get() = ghosts?.isEmpty == false
 
-    /**
-     * Free camera → each visible player in turn → free camera.
-     *
-     * Riding a player puts the view exactly where theirs was, which is the closest
-     * thing a recording has to a first-person seat. Leaving it hands the camera
-     * back with the player's position kept, so you carry on flying from where they
-     * were standing rather than being thrown back across the map.
-     */
     /** Follow [name], or stop following if that is who is already being followed. */
     fun toggleFollow(name: String) {
         val minecraft = Minecraft.getInstance()
@@ -159,6 +209,14 @@ object ReplayViewer {
         minecraft.setCameraEntity(self)
     }
 
+    /**
+     * Free camera → each visible player in turn → free camera.
+     *
+     * Riding a player puts the view exactly where theirs was, which is the closest
+     * thing a recording has to a first-person seat. Leaving it hands the camera
+     * back with the player's position kept, so you carry on flying from where they
+     * were standing rather than being thrown back across the map.
+     */
     fun cycleCamera() {
         val minecraft = Minecraft.getInstance()
         val players = visiblePlayers()
@@ -179,18 +237,6 @@ object ReplayViewer {
         } else {
             minecraft.setCameraEntity(next)
         }
-    }
-
-    /** Move the free camera to whoever is being followed, without riding them. */
-    fun teleportToFollowed() {
-        val minecraft = Minecraft.getInstance()
-        val self = minecraft.player ?: return
-        val target = visiblePlayers().firstOrNull { it.gameProfile.name == following }
-            ?: visiblePlayers().firstOrNull()
-            ?: return
-        self.snapTo(target.x, target.y, target.z, target.yRot, target.xRot)
-        minecraft.setCameraEntity(self)
-        following = null
     }
 
     /**
