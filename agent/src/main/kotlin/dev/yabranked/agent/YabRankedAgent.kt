@@ -273,7 +273,10 @@ class YabRankedAgent : DedicatedServerModInitializer {
             for (at in listOf(15L, 45L)) {
                 if (config.noShowTimeoutSeconds > at) {
                     scheduler.schedule({
-                        if (phase.get() == Phase.WAITING_FOR_PLAYERS && missingPlayers().isNotEmpty()) {
+                        if (phase.get() == Phase.WAITING_FOR_PLAYERS &&
+                            !startRequested.get() &&
+                            missingPlayers().isNotEmpty()
+                        ) {
                             val left = config.noShowTimeoutSeconds - at
                             announce(
                                 server,
@@ -300,7 +303,13 @@ class YabRankedAgent : DedicatedServerModInitializer {
                 val waited = java.time.Duration.between(readyAt, java.time.Instant.now()).seconds
                 val missing = missingPlayers()
                 when {
-                    missing.isNotEmpty() && waited >= config.noShowTimeoutSeconds -> {
+                    // Nobody is a no-show once the game has been told to start:
+                    // everyone was here, on their teams, and YAB accepted the
+                    // start. Whatever a disconnect at that point means, it is not
+                    // "your opponent never connected" — and a match that was
+                    // mid-STARTING has the start deadline below to end it.
+                    missing.isNotEmpty() && !startRequested.get() &&
+                        waited >= config.noShowTimeoutSeconds -> {
                         log.warn(
                             "[yabranked] {} did not arrive within {}s; voiding match",
                             missing.joinToString(", ") { it.name },
@@ -310,8 +319,18 @@ class YabRankedAgent : DedicatedServerModInitializer {
                         forcedOutcome.set(WireOutcome.VOID)
                         reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
                     }
-                    missing.isEmpty() && waited >= startDeadlineSeconds -> {
-                        log.error("[yabranked] everyone connected but the game never started in ${waited}s; voiding")
+                    // Either everybody is here, or the start was already requested
+                    // and somebody has since dropped — both are "this match server
+                    // never got a game going", and both still have to end, since
+                    // the orchestrator's reaper only looks at PENDING matches.
+                    (missing.isEmpty() || startRequested.get()) && waited >= startDeadlineSeconds -> {
+                        log.error(
+                            "[yabranked] game never started in {}s (start requested: {}, present: [{}], missing: [{}]); voiding",
+                            waited,
+                            startRequested.get(),
+                            config.roster.filter { it.uuid in arrived }.joinToString(", ") { it.name },
+                            missing.joinToString(", ") { it.name },
+                        )
                         announce(server, "§cThis match server could not start the game. §7Void — no rating changes.")
                         forcedOutcome.set(WireOutcome.VOID)
                         reportAndShutdown(server, WireOutcome.VOID, durationSeconds = 0)
@@ -485,7 +504,22 @@ class YabRankedAgent : DedicatedServerModInitializer {
             // Without this a player who connected and immediately quit would be
             // counted as present forever, and the match would sit out the far
             // longer "the game never started" deadline instead.
-            arrived -= uuid
+            //
+            // Logged because it used to not be, and it is the only thing that can
+            // turn a player who is visibly on the field back into a no-show: two
+            // production matches were voided as "your opponent never connected"
+            // 30 seconds into YAB's terrain preload, and the log said nothing
+            // about why the agent thought anybody was missing.
+            val wasPresent = arrived.remove(uuid)
+            if (wasPresent) {
+                log.warn(
+                    "[yabranked] {} disconnected before the game started (phase {}, start requested: {}); " +
+                        "counted as not arrived again",
+                    leaver.name,
+                    phase.get(),
+                    startRequested.get(),
+                )
+            }
             return
         }
 
