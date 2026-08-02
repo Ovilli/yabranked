@@ -314,11 +314,15 @@ class PostgresPlayerStore(private val db: Database) : PlayerStore {
     override fun leaderboard(season: Int, limit: Int, minMatches: Int): List<LadderEntry> =
         db.withConnection { c ->
             // Only `uuid` exists on both sides and it is the join key, so s.* plus
-            // the account columns still lets toStats/toPlayer read by name.
+            // the account columns still lets toStats/toPlayer read by name. Every
+            // column toPlayer touches has to be named here: a `players` column added
+            // by a migration and read by toPlayer but forgotten here does not fail
+            // at build time, it throws "column name X was not found in this
+            // ResultSet" on the live leaderboard — which is how `privacy` shipped.
             c.prepareStatement(
                 """
                 SELECT s.*, p.name, p.banned_at, p.created_at, p.country, p.background,
-                       p.hide_flag, p.hide_rating
+                       p.hide_flag, p.hide_rating, p.privacy
                 FROM season_stats s
                 LEFT JOIN players p ON p.uuid = s.uuid
                 WHERE s.season = ? AND s.matches_played >= ?

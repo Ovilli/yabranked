@@ -3,6 +3,7 @@ package dev.yabranked.backend.store
 import dev.yabranked.proto.MatchFormat
 import dev.yabranked.proto.MatchOutcome
 import dev.yabranked.proto.MatchSettings
+import dev.yabranked.proto.PrivacySettings
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeAll
@@ -114,6 +115,13 @@ class PostgresStoreTest {
         players.upsertStats(SeasonStats(b, season = 1, rating = 960, matchesPlayed = 1, wins = 0, losses = 1, draws = 0))
         val top = players.topByRating(season = 1, limit = 10, minMatches = 1)
         assertEquals(listOf(a, b), top.map { it.uuid })
+        // leaderboard() joins players and names its account columns one by one, so
+        // it breaks on a `players` column toPlayer reads and the join does not
+        // select. That is not a compile error and topByRating does not see it.
+        val ladder = players.leaderboard(season = 1, limit = 10, minMatches = 1)
+        assertEquals(listOf(a, b), ladder.map { it.stats.uuid })
+        assertEquals(listOf("Anna", "Ben"), ladder.map { it.player?.name })
+        assertEquals(PrivacySettings(), ladder.first().player!!.privacy)
         assertEquals(1, players.rankOf(a, season = 1, minMatches = 1))
         assertEquals(2, players.rankOf(b, season = 1, minMatches = 1))
         assertNull(players.rankOf(UUID.randomUUID(), season = 1, minMatches = 1))
