@@ -157,8 +157,7 @@ class MatchHistoryScreen(
 
         val centerX = width / 2
         val left = centerX - WIDTH / 2
-        Ui.header(g, centerX - 110, 10, 220, 24)
-        g.centeredText(font, "§lMATCH HISTORY", centerX, 17, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lMATCH HISTORY")
 
         // magnifier in front of the search box — drawn on every state so it never
         // disappears while loading or on an error card.

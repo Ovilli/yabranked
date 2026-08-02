@@ -252,9 +252,7 @@ class RankedScreen(
         super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 10, 220, 30)
-        g.centeredText(font, "§lYAB RANKED", centerX, 16, Ui.ACCENT)
-        g.centeredText(font, RankedState.selectedFormat.displayName, centerX, 28, Ui.TEXT_FAINT)
+        Ui.title(g, font, centerX, "§lYAB RANKED", caption = RankedState.selectedFormat.displayName)
 
         val profile = RankedState.profile
         if (profile == null) {

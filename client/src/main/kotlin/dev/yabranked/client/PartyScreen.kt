@@ -257,8 +257,7 @@ class PartyScreen(
         actionHits.clear()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 6, 220, 24)
-        g.centeredText(font, "§lPARTY", centerX, 13, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lPARTY")
 
         val party = RankedState.party
         val panelWidth = (width - 60).coerceIn(200, 380)

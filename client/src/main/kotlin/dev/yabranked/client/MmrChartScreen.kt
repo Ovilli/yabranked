@@ -237,9 +237,10 @@ class MmrChartScreen(
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 120, 10, 240, 24)
-        g.centeredText(font, "§lMMR HISTORY", centerX, 17, Ui.ACCENT)
-        g.centeredText(font, "§7$subtitle", centerX, 38, Ui.TEXT_DIM)
+        // The subtitle used to be drawn below the plate rather than inside it,
+        // which is why this screen's plate was the only 240-wide one: the line
+        // it belonged to was not being measured against it.
+        Ui.title(g, font, centerX, "§lMMR HISTORY", caption = subtitle, width = 240)
 
         // Chart takes the middle band, capped so it stays a sensible shape on very
         // wide/tall windows. Room is left at the bottom for the range scrollbar.

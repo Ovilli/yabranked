@@ -115,8 +115,7 @@ class PlayerProfileScreen(
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
         val centerX = width / 2
 
-        Ui.header(g, centerX - 110, 10, 220, 24)
-        g.centeredText(font, "§lPLAYER PROFILE", centerX, 17, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lPLAYER PROFILE")
 
         val p = when (val state = profile) {
             is Loadable.Loaded -> state.value

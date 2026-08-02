@@ -30,6 +30,69 @@ open class UiPrimitives : UiPalette() {
         g.fill(x + 1, y + 1, x + width - 1, y + height - 1, PANEL_BG)
     }
 
+    /** Top edge of every screen's title plate. */
+    val TITLE_TOP = 8
+
+    /** Width of every screen's title plate, unless it asks for another. */
+    val TITLE_WIDTH = 220
+
+    /** Space above the first line of a title plate, and below its last. */
+    private val TITLE_PAD = 7
+
+    /** Pitch between a title plate's lines: 9px of glyph, 1px of shadow, 1 clear. */
+    private val TITLE_LINE = 11
+
+    /**
+     * Height of a title plate holding [lines] lines, so a screen can place its
+     * content under one without re-deriving the arithmetic.
+     */
+    fun titleHeight(lines: Int): Int =
+        TITLE_PAD * 2 + 9 + (lines - 1).coerceAtLeast(0) * TITLE_LINE
+
+    /**
+     * The title plate every ranked screen opens with, sized from the lines it is
+     * given. Returns the plate's bottom edge.
+     *
+     * [header] only draws a rectangle, so each screen chose its own top, width
+     * and height and then placed text inside it by hand. Fourteen screens did
+     * that and produced five different plates — the title jumped four pixels
+     * down and twenty pixels wider as the player moved between them. Worse, the
+     * height was a guess *against* the line count rather than derived from it,
+     * so a three-line title in a plate sized for two crossed its own bottom
+     * border and spilled below it, which is a bug this signature cannot express.
+     *
+     * The three roles are fixed rather than passed in: [title] names the screen,
+     * [subtitle] is the subject it is currently showing, and [caption] explains
+     * how to read it. Anything a screen wants below the plate is not a title and
+     * goes in the screen.
+     */
+    fun title(
+        g: GuiGraphicsExtractor,
+        font: Font,
+        centerX: Int,
+        title: String,
+        subtitle: String? = null,
+        caption: String? = null,
+        width: Int = TITLE_WIDTH,
+        top: Int = TITLE_TOP,
+    ): Int {
+        val lines = buildList {
+            add(title to ACCENT)
+            subtitle?.let { add(it to WHITE) }
+            caption?.let { add(it to TEXT_FAINT) }
+        }
+        val height = titleHeight(lines.size)
+        header(g, centerX - width / 2, top, width, height)
+        // Fitted to the plate rather than trusted to be narrower than it: a
+        // subtitle is usually server-supplied — a mode's name, a board's metric
+        // — and nothing about it is bounded here.
+        val inner = width - 12
+        lines.forEachIndexed { index, (text, color) ->
+            g.centeredText(font, fit(font, text, inner), centerX, top + TITLE_PAD + index * TITLE_LINE, color)
+        }
+        return top + height
+    }
+
     /** Card plate: 1px border, flat body. */
     fun panel(g: GuiGraphicsExtractor, x: Int, y: Int, width: Int, height: Int) {
         g.fill(x, y, x + width, y + height, PANEL_BORDER)

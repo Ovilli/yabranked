@@ -120,9 +120,7 @@ class EndorseScreen(
         super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
 
-        Ui.header(g, centerX - 110, 8, 220, 34)
-        g.centeredText(font, "§lENDORSE", centerX, 13, Ui.ACCENT)
-        g.centeredText(font, "Who played well with you?", centerX, 26, Ui.TEXT_DIM)
+        Ui.title(g, font, centerX, "§lENDORSE", caption = "Who played well with you?")
 
         val teammates = when (val state = prompt) {
             is Loadable.Pending -> {

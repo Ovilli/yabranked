@@ -172,8 +172,7 @@ class PrivacyScreen(
         super.drawContent(g, mouseX, mouseY, partialTick)
         val centerX = width / 2
 
-        Ui.header(g, centerX - 110, 6, 220, 24)
-        g.centeredText(font, "§lPRIVACY", centerX, 13, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lPRIVACY")
 
         // Hint for whichever row the cursor is over, in a fixed strip so the
         // rows never shift as the mouse moves across them.

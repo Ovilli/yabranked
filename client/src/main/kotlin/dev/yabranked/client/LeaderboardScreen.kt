@@ -279,8 +279,7 @@ class LeaderboardScreen(
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 10, 220, 24)
-        g.centeredText(font, "§lLEADERBOARD", centerX, 17, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lLEADERBOARD")
 
         // Season label sits between the prev/next buttons.
         val seasonText = if (season > 0) "Season $season" else "Season …"

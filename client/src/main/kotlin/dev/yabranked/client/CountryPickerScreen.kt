@@ -88,8 +88,7 @@ class CountryPickerScreen(
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 10, 220, 24)
-        g.centeredText(font, "§lSET COUNTRY", centerX, 17, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lSET COUNTRY")
 
         val left = centerX - WIDTH / 2
         Ui.icon(g, Ui.ICON_SEARCH, left + 2, 38, 10, Ui.TEXT_DIM)

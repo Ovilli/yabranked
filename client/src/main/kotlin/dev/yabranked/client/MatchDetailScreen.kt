@@ -59,8 +59,7 @@ class MatchDetailScreen(
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 10, 220, 24)
-        g.centeredText(font, "§lMATCH DETAILS", centerX, 17, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lMATCH DETAILS")
 
         val left = centerX - CARD_W / 2
         Ui.panel(g, left, TOP, CARD_W, CARD_H)

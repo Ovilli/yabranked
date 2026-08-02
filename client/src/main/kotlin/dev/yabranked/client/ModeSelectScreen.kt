@@ -232,8 +232,7 @@ class ModeSelectScreen(
         super.drawContent(g, mouseX, mouseY, partialTick)
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 8, 220, 24)
-        g.centeredText(font, "§lCHOOSE A MODE", centerX, 15, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lCHOOSE A MODE")
 
         g.enableScissor(0, listTop, width, listBottom)
         val cardWidth = (width - 60).coerceIn(180, 420)

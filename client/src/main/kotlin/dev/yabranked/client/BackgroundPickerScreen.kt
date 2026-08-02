@@ -61,8 +61,7 @@ class BackgroundPickerScreen(
         if (openedAt == 0L) openedAt = System.currentTimeMillis()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 10, 220, 24)
-        g.centeredText(font, "§lCARD BACKGROUND", centerX, 17, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lCARD BACKGROUND")
 
         val current = RankedState.profile?.background ?: "default"
         status?.let { g.centeredText(font, "§7$it", centerX, height - 44, Ui.TEXT_DIM) }

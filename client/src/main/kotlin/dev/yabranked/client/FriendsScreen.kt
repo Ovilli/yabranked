@@ -312,8 +312,7 @@ class FriendsScreen(
         hits.clear()
 
         val centerX = width / 2
-        Ui.header(g, centerX - 110, 6, 220, 24)
-        g.centeredText(font, "§lFRIENDS", centerX, 13, Ui.ACCENT)
+        Ui.title(g, font, centerX, "§lFRIENDS")
 
         val listWidth = (width - 60).coerceIn(200, 420)
         val left = (width - listWidth) / 2
@@ -396,6 +395,13 @@ class FriendsScreen(
 
         list.forEachIndexed { index, friend ->
             val y = row(g, left, w, index)
+            // The row opens the friend's profile, so it says so on hover. Drawn
+            // before the controls, which are opaque and sit on top of it.
+            if (mouseX >= left && mouseX < left + w && mouseY >= y && mouseY < y + ROW - 2 &&
+                mouseY >= listTop && mouseY < listBottom
+            ) {
+                g.fill(left, y, left + w, y + ROW - 2, Ui.HOVER)
+            }
 
             // Right-hand controls first, and the text second. They are drawn in
             // this order because the buttons are opaque fills: text drawn after
@@ -436,6 +442,21 @@ class FriendsScreen(
                 color = if (friend.presence == PresenceState.OFFLINE) Ui.TEXT_FAINT else Ui.WIN,
                 trailing = friend.rating?.let { "$it MMR" },
             )
+
+            // A friend is the one person on this screen you are most likely to
+            // want to look up, and the row was the only thing here that was not
+            // a way to anywhere. Registered *after* the row's own buttons,
+            // because `hits` is searched in fill order and this rectangle
+            // covers them: Invite and Remove still win their own clicks.
+            hits += Hit(left, y, w, ROW - 2) {
+                // Opening a screen with a remove still armed would leave it
+                // armed on the way back, one click from a silent unfriending.
+                confirmRemove = null
+                Sfx.select()
+                minecraft.setScreenAndShow(
+                    PlayerProfileScreen(this, friend.player.uuid, friend.player.name)
+                )
+            }
         }
     }
 

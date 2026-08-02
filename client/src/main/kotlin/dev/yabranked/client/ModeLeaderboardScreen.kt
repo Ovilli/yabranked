@@ -46,7 +46,12 @@ class ModeLeaderboardScreen(
     /** Bumped per load; a stale response is dropped rather than drawn. */
     private var loadId = 0
 
-    private val listTop get() = 54
+    /**
+     * Measured from the title plate rather than guessed at, and always from the
+     * three-line height even while the category is still loading — a list that
+     * slides down when the caption arrives is worse than a slightly deep gap.
+     */
+    private val listTop get() = Ui.TITLE_TOP + Ui.titleHeight(3) + 6
     private val listBottom get() = height - 56
 
     override fun layout() {
@@ -142,10 +147,11 @@ class ModeLeaderboardScreen(
         val centerX = width / 2
         val category = categories.valueOrNull?.getOrNull(index)
 
-        Ui.header(g, centerX - 110, 8, 220, 34)
-        g.centeredText(font, "§lLEADERBOARDS", centerX, 13, Ui.ACCENT)
-        g.centeredText(font, category?.displayName ?: "…", centerX, 25, Ui.WHITE)
-        category?.let { g.centeredText(font, metricLabel(it), centerX, 34, Ui.TEXT_FAINT) }
+        Ui.title(
+            g, font, centerX, "§lLEADERBOARDS",
+            subtitle = category?.displayName ?: "…",
+            caption = category?.let { metricLabel(it) },
+        )
 
         val listWidth = (width - 60).coerceIn(200, 380)
         val left = (width - listWidth) / 2
@@ -214,7 +220,11 @@ class ModeLeaderboardScreen(
         "playtime" -> "Ranked by time played this season"
         "streak" -> "Ranked by longest win streak this season"
         "wins" -> "Ranked by wins — this mode has no ladder"
-        else -> "Ranked by this mode's own MMR"
+        // "rating" covers two different boards. Overall is the one that is not
+        // a mode at all — it is the solo 1v1 season ladder — and calling it a
+        // mode's private MMR described the wrong number to the player.
+        else -> if (category.format == null) "Ranked by the solo 1v1 season ladder"
+        else "Ranked by this mode's own MMR"
     }
 
     override fun onClose() {
