@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```sh
 ./gradlew test                                  # all unit + API tests
 ./gradlew :proto:test :backend:test :client:test  # what CI runs (agent needs mavenLocal, see below)
-./gradlew :agent:test                           # agent unit tests — local only, never runs in CI
+./gradlew :agent-core:test                      # the agent's testable half (CI runs this)
 ./gradlew :backend:test                         # one module
 ./gradlew :backend:test --tests '*MatchServiceTest*'          # one class
 ./gradlew :backend:test --tests '*MatchServiceTest.settle*'   # one test
@@ -37,17 +37,20 @@ It used to be `org.gradle.java.home` in `gradle.properties` pointing at an absol
 
 `.github/workflows/ci.yml` runs `:proto:test :backend:test` in one job and `:client:test` (Loom, so a Minecraft download) in another, plus a syntax gate on `deploy/admin/app.py`.
 
+`:agent-core` carries the agent's testable logic precisely so CI has something of the agent to run; `:agent` itself never builds here.
+
 **`agent` is included by `settings.gradle.kts` only when `me.jfenn.bingo:api` is really in mavenLocal**, and that condition is not a convenience. Loom resolves that dependency at *configuration* time, and Gradle configures every project in a build whatever task was asked for — so on a machine without a YAB checkout the missing artifact failed `./gradlew :backend:test` and `./gradlew projects` too, with an error naming a module the caller never mentioned. Excluding it from the task list does nothing. The repo was unbuildable for anyone who had not published YAB first, which CI found by being the first such machine. `-PskipAgent=true` reproduces the trimmed build where the artifact *is* present; the cost of all this is that `./gradlew projects` is not the same everywhere.
 
 The runner having Docker is load-bearing — `PostgresStoreTest` `assumeTrue`-skips silently without it, so CI is the only place the SQL stores are exercised at all. A step after the tests reads the JUnit XML and raises a workflow warning if that class skipped, because a silent skip is indistinguishable from a pass.
 
 ## Architecture
 
-Four Gradle modules, one shared wire model:
+Five Gradle modules, one shared wire model:
 
 - **`proto`** — every DTO on every wire (HTTP + queue/party WebSockets + agent reports). Plain library, no Minecraft deps. Split only for size: `Model.kt` (session, profile, match, queue) and `Social.kt` (friends, parties, endorsements, leaderboard categories); the same rules apply to both.
 - **`backend`** — Ktor/Netty service: auth, matchmaking, rating, match records, orchestration.
-- **`agent`** — server-side Fabric mod that runs *inside* an ephemeral match container and drives one YAB game. **Its tests run only on a machine with the YAB api in mavenLocal, never in CI** — that artifact is published to a GitLab package registry behind a job token, so a runner cannot fetch it. `./gradlew :agent:test` before touching this module is the whole safety net; nothing will catch a break for you. The logic worth testing is deliberately kept free of Minecraft and YAB types (`AgentConfig`, `VoidDeadlines`, `ReplayStream`) so it can be asserted rather than reproduced — reproducing an agent bug costs a container, a match and two clients.
+- **`agent-core`** — the agent's Minecraft-free half: `AgentConfig` (env parsing), `VoidDeadlines` (the pre-game void rules), `ReplayFormat`/`ReplayStream` (the `.yabr` writer), `MatchRules`. Plain library, no Loom, **no YAB dependency — which is the entire point**: `:agent` cannot be built in CI, so anything testable that stays in it is untested forever. This module is always in the build and always tested. Put new agent logic here by default; only code that genuinely needs a `MinecraftServer` belongs in `:agent`.
+- **`agent`** — server-side Fabric mod that runs *inside* an ephemeral match container and drives one YAB game. What is left here is the Minecraft coupling itself: the Netty tap, the mixin accessors, the YAB driving. **It has no test source set on purpose** — a suite here would never run anywhere. `agent-core`'s classes are **flattened into the mod jar** by the `bundledCore` configuration, the same trick `:client` uses for `:proto` and for the same reason (Fabric JiJ only loads nested jars that are themselves mods). Getting that wrong is not a loud failure: the mod would load and then `NoClassDefFoundError` inside `AgentConfig.fromEnv`, which is indistinguishable from an agent correctly deciding to stay inert.
 - **`client`** — client-side Fabric mod: title-screen "Ranked" button and all ranked UI.
 
 ### Match lifecycle (the path worth knowing)

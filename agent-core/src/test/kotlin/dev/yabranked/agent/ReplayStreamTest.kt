@@ -198,8 +198,17 @@ class ReplayStreamTest {
         // Declared independently in :client as well. A renumbering here turns
         // every configuration frame into a play frame, which is a malformed
         // packet in the middle of an already-drawn world.
-        assertEquals(0.toByte(), ReplayPacketTap.PROTOCOL_SKIP)
-        assertEquals(1.toByte(), ReplayPacketTap.PROTOCOL_CONFIGURATION)
-        assertEquals(2.toByte(), ReplayPacketTap.PROTOCOL_PLAY)
+        assertEquals(0.toByte(), ReplayFormat.PROTOCOL_SKIP)
+        assertEquals(1.toByte(), ReplayFormat.PROTOCOL_CONFIGURATION)
+        assertEquals(2.toByte(), ReplayFormat.PROTOCOL_PLAY)
+    }
+
+    @Test
+    fun `the header sizes match the layout they describe`() {
+        // Both are used as offsets by the reader; either being wrong shifts
+        // every frame in the file by a few bytes and decodes noise.
+        assertEquals(5, ReplayFormat.FILE_HEADER, "\"YABR\" plus one version byte")
+        assertEquals(9, ReplayFormat.FRAME_HEADER, "u8 protocol + u32 millis + u32 length")
+        assertEquals(4, ReplayFormat.MAGIC.size)
     }
 }

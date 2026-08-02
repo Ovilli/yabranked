@@ -16,9 +16,25 @@ repositories {
     mavenLocal()
 }
 
+// agent-core's classes are flattened into the mod jar rather than nested as a
+// jar-in-jar, for the same reason :client does it to :proto: Fabric's JiJ only
+// loads nested jars that are themselves mods, and agent-core is a plain
+// library. Without this the mod loads and then dies on NoClassDefFoundError at
+// the first AgentConfig.fromEnv — which, since a config failure is how the
+// agent stays inert, would look exactly like a correctly inert agent.
+val bundledCore: Configuration by configurations.creating {
+    isTransitive = false // only agent-core's own classes; kotlinx + slf4j come from the game
+    isCanBeConsumed = false
+    isCanBeResolved = true
+}
+
 dependencies {
     // Minecraft 26.x ships unobfuscated — no mappings dependency needed
     minecraft("com.mojang:minecraft:26.2")
+
+    // the Minecraft-free half: env parsing, void deadlines, replay stream format
+    implementation(project(":agent-core"))
+    bundledCore(project(":agent-core"))
 
     implementation("net.fabricmc:fabric-loader:0.19.3")
     implementation("net.fabricmc.fabric-api:fabric-api:0.156.0+26.2")
@@ -28,26 +44,17 @@ dependencies {
     // provided at runtime by the YAB mod jar (which nests the api jar)
     compileOnly("me.jfenn.bingo:api:2.12.1")
 
-    testImplementation(kotlin("test"))
 }
 
-// Unit tests for the agent's non-Minecraft logic — the env parsing, the void
-// deadlines and the replay stream's on-disk format. Everything under test here
-// is deliberately reachable without a server: the agent's failures are
-// expensive to reproduce (they need a container, a match and two clients) and
-// cheap to assert.
-//
-// These do NOT run in CI. `:agent` is only in the build when
-// `me.jfenn.bingo:api` is in mavenLocal, and that artifact is published to a
-// GitLab package registry behind a job token, so a CI runner cannot fetch it.
-// Run them locally with `./gradlew :agent:test`.
-tasks.test {
-    useJUnitPlatform()
-    // Minecraft's log4j config rides in on Loom's test classpath and opens
-    // logs/latest.log relative to the working directory; keep that under build/
-    // rather than in the module root, as :client does.
-    workingDir = layout.buildDirectory.dir("test-work").get().asFile
-    doFirst { workingDir.mkdirs() }
+// What is left in this module is the Minecraft coupling itself — the Netty tap,
+// the mixin accessors, the YAB driving — and there is no useful way to unit-test
+// it without a server. Everything that *was* testable now lives in :agent-core,
+// which CI runs. This module keeps no test source set on purpose: one here would
+// be a suite that never runs anywhere, since :agent is not in the build at all
+// without me.jfenn.bingo:api in mavenLocal.
+
+tasks.named<Jar>("jar") {
+    from(bundledCore.elements.map { jars -> jars.map { zipTree(it) } })
 }
 
 tasks.processResources {

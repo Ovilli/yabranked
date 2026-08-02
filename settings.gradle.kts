@@ -18,6 +18,12 @@ include("proto")
 include("backend")
 include("client")
 
+// The agent's Minecraft-free half: env parsing, the void deadlines and the
+// replay stream format. Split out of `:agent` precisely so it is *always* in
+// the build — it has no Loom and no YAB dependency, so CI can compile and test
+// it even though it can never build `:agent` itself (see below).
+include("agent-core")
+
 /*
  * `agent` is included only when the artifact it cannot be configured without is
  * actually present.

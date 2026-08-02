@@ -12,6 +12,12 @@
 # machine without a YAB checkout the missing artifact failed `:backend:test`
 # too — which is how this workflow's first run failed. `settings.gradle.kts`
 # includes the module only when the artifact is really in mavenLocal.
+#
+# `:agent-core` is the answer to that rather than a workaround for it: the
+# agent's env parsing, void deadlines and replay stream format have no Minecraft
+# or YAB types in them, so they live in a plain module that is always in the
+# build and always tested here. What stays in `:agent` is the Minecraft coupling
+# itself, which there is no useful way to unit-test anyway.
 name: CI
 
 on:
@@ -48,7 +54,9 @@ jobs:
       # assumeTrue-skips when Docker is absent — which is every developer
       # machine without it. The runner has Docker, so this is the only place
       # the SQL stores are actually exercised.
-      - run: ./gradlew :proto:test :backend:test
+      # :agent-core is the agent's Minecraft-free half. It exists as its own
+      # module so this line is possible: :agent itself can never be built here.
+      - run: ./gradlew :proto:test :agent-core:test :backend:test
 
       - name: Say whether the Postgres tests really ran
         if: always()
