@@ -12,9 +12,18 @@ import java.time.Duration
 
 /**
  * Wire format for result reports. Mirrors dev.yabranked.proto.MatchResultReport /
- * MatchOutcome — kept as a local copy because the proto module is a plain JVM
- * library that can't be nested into a Fabric mod jar without repackaging.
- * TODO(phase 3): publish proto as a nested-jar-capable artifact and share it.
+ * MatchOutcome.
+ *
+ * The reason given here used to be that proto "can't be nested into a Fabric mod
+ * jar without repackaging". That is no longer true and has not been for a while:
+ * `:client` flattens proto's classes into its jar rather than nesting them, and
+ * `:agent` now does the same via `bundledCore`, which is how `MatchRules` stopped
+ * being a copy. These two are still copies only because they sit on the settle
+ * path — if their encoding is wrong, matches do not settle — so replacing them is
+ * a change worth making deliberately rather than as a side effect.
+ *
+ * Until then the field names and @SerialName values are the contract: change one
+ * here and you must change it in `:proto` too.
  */
 @Serializable
 enum class WireOutcome {

@@ -1,5 +1,8 @@
 package dev.yabranked.agent
 
+import dev.yabranked.proto.MatchFormat
+import dev.yabranked.proto.MatchRules
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -168,6 +171,46 @@ class AgentConfigTest {
     fun `an unparseable timeout falls back to the default instead of aborting the match`() {
         val config = assertNotNull(AgentConfig.fromEnv(env("YABRANKED_NO_SHOW_TIMEOUT_SECONDS" to "soon")))
         assertEquals(90L, config.noShowTimeoutSeconds)
+    }
+
+    @Test
+    fun `every format's rules survive the trip the orchestrator actually makes`() {
+        // MatchOrchestrator encodes YABRANKED_RULES with proto's serializer, and
+        // the agent used to decode it into a hand-copied MatchRules of its own —
+        // two declarations of one wire type, kept correct by hand. They are the
+        // same class now, and this walks every real format through the same env
+        // var to say so rather than assuming it.
+        for (format in MatchFormat.entries) {
+            val encoded = Json.encodeToString(MatchRules.serializer(), format.rules)
+            val config = assertNotNull(
+                AgentConfig.fromEnv(env("YABRANKED_RULES" to encoded)),
+                "${format.name} produced rules the agent could not read",
+            )
+            assertEquals(format.rules, config.rules, "rules changed in transit for ${format.name}")
+        }
+    }
+
+    @Test
+    fun `unparseable rules fall back to a playable format rather than refusing to start`() {
+        // A match server that will not start is worse than one playing the
+        // original ranked format: the first voids the match, the second plays it.
+        val config = assertNotNull(
+            AgentConfig.fromEnv(env("YABRANKED_RULES" to "{not json", "YABRANKED_TIME_LIMIT_MINUTES" to "45"))
+        )
+        assertEquals(45, config.rules.timeLimitMinutes, "the separate time-limit variable is the fallback's only input")
+        assertEquals(MatchRules().lockout, config.rules.lockout)
+    }
+
+    @Test
+    fun `rules from a newer backend decode rather than being rejected`() {
+        // ignoreUnknownKeys is the whole of the forward-compatibility story: a
+        // backend that adds a rule must not make every older agent inert.
+        val config = assertNotNull(
+            AgentConfig.fromEnv(
+                env("YABRANKED_RULES" to """{"goalCount":3,"someRuleFromTheFuture":true}""")
+            )
+        )
+        assertEquals(3, config.rules.goalCount)
     }
 
     @Test

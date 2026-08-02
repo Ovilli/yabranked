@@ -13,10 +13,12 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /*
- * Wire mirrors of dev.yabranked.proto's replay types. Same reason as
- * [WireResultReport]: the proto module is a plain JVM library that cannot be
- * nested into a Fabric mod jar, so the agent keeps its own copy. Field names
- * are the contract — change one here and you must change it there.
+ * Wire mirrors of dev.yabranked.proto's replay types. Same standing as
+ * [WireResultReport]: proto *is* reachable from this module now — it is
+ * flattened into the mod jar by `bundledCore`, which is what let `MatchRules`
+ * become the shared class — and these are still copies only because nobody has
+ * done the swap deliberately. Field names remain the contract: change one here
+ * and you must change it there.
  */
 
 @Serializable

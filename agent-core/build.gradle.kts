@@ -11,6 +11,12 @@ kotlin {
 }
 
 dependencies {
+    // The shared wire model. The agent used to carry a hand-copied MatchRules
+    // instead, under a comment saying proto "cannot be nested into a Fabric mod
+    // jar yet" — which stopped being true when :client solved it by flattening,
+    // and left a DTO that had to be edited in two places to stay correct.
+    api(project(":proto"))
+
     // must match kotlinx-serialization in YAB / fabric-language-kotlin, exactly
     // as :proto does — these classes end up in the same mod jar
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")

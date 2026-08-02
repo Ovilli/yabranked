@@ -1,5 +1,6 @@
 package dev.yabranked.agent
 
+import dev.yabranked.proto.MatchRules
 import kotlinx.serialization.json.Json
 import java.util.UUID
 

@@ -22,8 +22,13 @@ repositories {
 // library. Without this the mod loads and then dies on NoClassDefFoundError at
 // the first AgentConfig.fromEnv — which, since a config failure is how the
 // agent stays inert, would look exactly like a correctly inert agent.
+// Non-transitive on purpose — kotlinx-serialization and slf4j come from the
+// game at runtime and must not be dragged in — so every project whose classes
+// are needed has to be listed explicitly below. :proto is one of them: dropping
+// it here is what turns "agent-core compiles" into a mod that dies on
+// dev/yabranked/proto/MatchRules at the first config parse.
 val bundledCore: Configuration by configurations.creating {
-    isTransitive = false // only agent-core's own classes; kotlinx + slf4j come from the game
+    isTransitive = false
     isCanBeConsumed = false
     isCanBeResolved = true
 }
@@ -35,6 +40,7 @@ dependencies {
     // the Minecraft-free half: env parsing, void deadlines, replay stream format
     implementation(project(":agent-core"))
     bundledCore(project(":agent-core"))
+    bundledCore(project(":proto"))
 
     implementation("net.fabricmc:fabric-loader:0.19.3")
     implementation("net.fabricmc.fabric-api:fabric-api:0.156.0+26.2")
