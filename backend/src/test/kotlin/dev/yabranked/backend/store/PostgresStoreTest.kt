@@ -154,4 +154,88 @@ class PostgresStoreTest {
         assertEquals("4", settings.get("current_season"))
         assertNull(settings.get("missing"))
     }
+
+    /**
+     * The report paths that only Postgres has, and the one that was broken.
+     *
+     * `existsFor(match, reporter, accused)` has allowed one report per accused
+     * since team formats landed, but the baseline schema still carried
+     * `UNIQUE (match_id, reporter)` — so reporting a second opponent in a 4v4
+     * passed the application's check and then died on the insert. Every test
+     * ran against the in-memory store, which has no constraint, so nothing
+     * caught it. Migration V6 replaces the constraint; this is what says so.
+     */
+    @Test
+    fun `reports allow one row per accused, and carry a moderator's decision`() {
+        assumeTrue(dockerAvailable, "docker not available")
+
+        val players = PostgresPlayerStore(db)
+        val matches = PostgresMatchStore(db)
+        val reports = PostgresReportStore(db)
+
+        val reporter = UUID.randomUUID()
+        val first = UUID.randomUUID()
+        val second = UUID.randomUUID()
+        listOf(reporter to "Rep", first to "One", second to "Two").forEach { (uuid, name) ->
+            players.upsertPlayer(PlayerRecord(uuid, name, createdAt = now()))
+        }
+        val match = MatchRecord(
+            id = UUID.randomUUID(),
+            season = 1,
+            format = MatchFormat.RANKED_2V2,
+            settings = MatchSettings(MatchFormat.RANKED_2V2, worldSeed = 1L, cardSeed = 2L, timeLimitSeconds = 5400),
+            playerA = reporter,
+            playerB = first,
+            status = MatchStatus.COMPLETED,
+            serverToken = "token",
+            outcome = MatchOutcome.TEAM_A_WIN,
+            ratingABefore = 1000,
+            ratingBBefore = 1000,
+            ratingAAfter = 1040,
+            ratingBAfter = 960,
+            createdAt = now(),
+            completedAt = now(),
+            teams = listOf(listOf(reporter), listOf(first, second)),
+        )
+        matches.insert(match)
+
+        // Two opponents, two reports, one reporter — this is the insert that
+        // used to violate reports_match_id_reporter_key.
+        val one = ReportRecord(UUID.randomUUID(), match.id, reporter, first, "cheating", now())
+        val two = ReportRecord(UUID.randomUUID(), match.id, reporter, second, "also cheating", now())
+        reports.insert(one)
+        reports.insert(two)
+        assertTrue(reports.existsFor(match.id, reporter, first))
+        assertTrue(reports.existsFor(match.id, reporter, second))
+        assertEquals(2, reports.forMatch(match.id).size)
+
+        // fresh rows are OPEN with nothing recorded against them
+        val loaded = reports.get(one.id)!!
+        assertEquals(ReportStatus.OPEN, loaded.status)
+        assertNull(loaded.resolvedAt)
+        assertEquals(2, reports.list(50, ReportStatus.OPEN).count { it.matchId == match.id })
+
+        val decided = reports.resolve(one.id, ReportStatus.ACTIONED, "ovilli", "confirmed", now())!!
+        assertEquals(ReportStatus.ACTIONED, decided.status)
+        assertEquals("ovilli", decided.resolvedBy)
+        assertEquals("confirmed", decided.resolutionNote)
+        assertTrue(decided.resolvedAt != null)
+        assertEquals(decided, reports.get(one.id), "the decision must survive the round-trip")
+
+        // COALESCE: a later transition that names nobody keeps who decided it
+        val again = reports.resolve(one.id, ReportStatus.DISMISSED, null, null, now())!!
+        assertEquals("ovilli", again.resolvedBy)
+        assertEquals("confirmed", again.resolutionNote)
+
+        // REVIEWING is a claim, not a decision, so it clears the timestamp again
+        assertNull(reports.resolve(two.id, ReportStatus.REVIEWING, "ovilli", null, now())!!.resolvedAt)
+
+        assertNull(reports.resolve(UUID.randomUUID(), ReportStatus.DISMISSED, null, null, now()))
+
+        val counts = reports.countsAgainst(listOf(first, second, UUID.randomUUID()))
+        assertEquals(1, counts[first])
+        assertEquals(1, counts[second])
+        assertEquals(2, counts.size, "an account with no reports must not appear with a zero")
+        assertTrue(reports.countsAgainst(emptyList()).isEmpty())
+    }
 }

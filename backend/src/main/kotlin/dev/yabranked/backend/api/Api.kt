@@ -2,6 +2,8 @@ package dev.yabranked.backend.api
 
 import dev.yabranked.backend.auth.SessionVerifier
 import dev.yabranked.backend.match.MatchService
+import dev.yabranked.backend.moderation.FileResult
+import dev.yabranked.backend.moderation.ReportView
 import dev.yabranked.backend.profile.Backgrounds
 import dev.yabranked.backend.queue.QueueService
 import dev.yabranked.backend.rating.Tier
@@ -12,6 +14,7 @@ import dev.yabranked.backend.store.MatchRecord
 import dev.yabranked.backend.store.MatchStatus
 import dev.yabranked.backend.store.PlayerStore
 import dev.yabranked.backend.store.ReportRecord
+import dev.yabranked.backend.store.ReportStatus
 import dev.yabranked.backend.store.ReportStore
 import dev.yabranked.backend.store.StoreDispatchers
 import dev.yabranked.proto.MatchHistoryEntry
@@ -182,6 +185,55 @@ class TokenRegistry(
     }
 }
 
+/**
+ * Admin-only wire types.
+ *
+ * These are declared here rather than in `:proto` on purpose: the player client
+ * never sees an admin route, and putting them in the shared module would ship
+ * the moderation vocabulary in every mod jar and make it a compatibility
+ * surface. The only consumer is the admin console in `deploy/admin/`.
+ */
+@Serializable
+data class ResolveReportRequest(
+    /** [ReportStatus] by name, case-insensitive. */
+    val status: String,
+    /** Free-text moderator name; null keeps whatever an earlier transition recorded. */
+    val moderator: String? = null,
+    val note: String? = null,
+)
+
+@Serializable
+data class AdminReportJson(
+    val id: String,
+    val matchId: String,
+    val reporter: String,
+    val accused: String,
+    val reason: String,
+    val createdAt: String,
+    val status: String,
+    val resolvedAt: String? = null,
+    val resolvedBy: String? = null,
+    val resolutionNote: String? = null,
+    /** Total reports ever filed against [accused]; null when not counted. */
+    val reportsAgainst: Int? = null,
+)
+
+private fun ReportRecord.toJson(reportsAgainst: Int? = null) = AdminReportJson(
+    id = id.toString(),
+    matchId = matchId.toString(),
+    reporter = reporter.toString(),
+    accused = accused.toString(),
+    reason = reason,
+    createdAt = createdAt.toString(),
+    status = status.name,
+    resolvedAt = resolvedAt?.toString(),
+    resolvedBy = resolvedBy,
+    resolutionNote = resolutionNote,
+    reportsAgainst = reportsAgainst,
+)
+
+private fun ReportView.toJson() = report.toJson(totalAgainstAccused)
+
 class ApiDependencies(
     val verifier: SessionVerifier,
     val players: PlayerStore,
@@ -204,6 +256,9 @@ class ApiDependencies(
     /** Match recordings; see [replayApi] for who may read one. */
     val replays: dev.yabranked.backend.store.ReplayStore =
         dev.yabranked.backend.store.InMemoryReplayStore(),
+    /** Filing and judging reports; see [dev.yabranked.backend.moderation.ModerationService]. */
+    val moderation: dev.yabranked.backend.moderation.ModerationService =
+        dev.yabranked.backend.moderation.ModerationService(reports, matches, replays, seasons),
     /** The packet bytes those recordings consist of, which are not in the database. */
     val replayBlobs: dev.yabranked.backend.store.ReplayBlobStore =
         dev.yabranked.backend.store.InMemoryReplayBlobStore(),
@@ -890,67 +945,32 @@ fun Application.rankedApi(deps: ApiDependencies) {
                 return@post
             }
             val request = call.receive<ReportRequest>()
-            val namedAccused = request.accused?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-            val matchId = request.matchId?.let { runCatching { UUID.fromString(it) }.getOrNull() }
-            if (matchId == null && namedAccused == null) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "a match id or an accused player is required"))
-                return@post
+            val result = onStore {
+                deps.moderation.file(
+                    reporter = reporter,
+                    matchId = request.matchId?.let { runCatching { UUID.fromString(it) }.getOrNull() },
+                    accused = request.accused?.let { runCatching { UUID.fromString(it) }.getOrNull() },
+                    reason = request.reason,
+                )
             }
-
-            val match = onStore {
-                if (matchId != null) deps.matches.get(matchId)
-                // Newest shared match, across every mode: the thing being
-                // reported is behaviour, and it does not stop being reportable
-                // because it happened in a casual game.
-                else deps.matches
-                    .between(reporter, namedAccused!!, deps.seasons.currentSeason, limit = 1)
-                    .firstOrNull()
-            }
-            // Membership through the roster, not playerA/playerB: those are only
-            // each side's first player once teams exist, so four of a 3v3's six
-            // players could not file a report at all.
-            if (match == null || match.sideOf(reporter) == null) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
-                return@post
-            }
-            val opponents = match.opponentsOf(reporter)
-            val accused = when {
-                namedAccused != null && namedAccused in opponents -> namedAccused
-                namedAccused != null ->
-                    return@post call.respond(
+            when (result) {
+                is FileResult.Filed ->
+                    call.respond(HttpStatusCode.OK, mapOf("status" to "reported"))
+                FileResult.NothingIdentified ->
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        mapOf("error" to "a match id or an accused player is required"),
+                    )
+                FileResult.NotOnOtherSide ->
+                    call.respond(
                         HttpStatusCode.BadRequest,
                         mapOf("error" to "that player was not on the other side of this match"),
                     )
-                else -> opponents.firstOrNull()
+                FileResult.NoSuchMatch ->
+                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
+                FileResult.AlreadyReported ->
+                    call.respond(HttpStatusCode.Conflict, mapOf("error" to "already reported"))
             }
-            if (accused == null) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "no such match for this player"))
-                return@post
-            }
-            val filed = onStore {
-                if (deps.reports.existsFor(match.id, reporter, accused)) return@onStore false
-                deps.reports.insert(
-                    ReportRecord(
-                        id = UUID.randomUUID(),
-                        matchId = match.id,
-                        reporter = reporter,
-                        accused = accused,
-                        reason = request.reason.take(500),
-                        createdAt = java.time.Instant.now(),
-                    )
-                )
-                // A reported match's recording is what a moderator will actually
-                // judge the accusation on, so it stops being subject to the
-                // retention sweep the moment the report exists — and stays that
-                // way whatever the players do with their own copies.
-                deps.replays.setUnderReview(match.id, true)
-                true
-            }
-            if (!filed) {
-                call.respond(HttpStatusCode.Conflict, mapOf("error" to "already reported"))
-                return@post
-            }
-            call.respond(HttpStatusCode.OK, mapOf("status" to "reported"))
         }
 
         // --- Admin (shared-secret header; disabled unless adminToken is set) ---
@@ -972,22 +992,62 @@ fun Application.rankedApi(deps: ApiDependencies) {
             call.respond(mapOf("season" to to, "previousSeason" to from))
         }
 
+        /*
+         * The moderation queue.
+         *
+         * `?status=open` is what a moderator actually wants — the unfiltered
+         * list mixes fresh accusations in with every one that has already been
+         * judged, which is how the queue reads as endless. `reportsAgainst` is
+         * the total ever filed against that account: one report is noise, and
+         * the ninth about the same player is the reason to look.
+         */
         get("/v1/admin/reports") {
             if (!isAdmin(call)) {
                 call.respond(HttpStatusCode.Forbidden, mapOf("error" to "admin token required"))
                 return@get
             }
             val limit = call.request.queryParameters["limit"]?.toIntOrNull()?.coerceIn(1, 200) ?: 50
-            call.respond(onStore { deps.reports.list(limit) }.map { report ->
-                mapOf(
-                    "id" to report.id.toString(),
-                    "matchId" to report.matchId.toString(),
-                    "reporter" to report.reporter.toString(),
-                    "accused" to report.accused.toString(),
-                    "reason" to report.reason,
-                    "createdAt" to report.createdAt.toString(),
-                )
-            })
+            val rawStatus = call.request.queryParameters["status"]
+            val status = ReportStatus.parse(rawStatus)
+            if (rawStatus != null && status == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "unknown status '$rawStatus'"))
+                return@get
+            }
+            call.respond(onStore { deps.moderation.list(limit, status) }.map { it.toJson() })
+        }
+
+        /*
+         * A moderator's decision on one report.
+         *
+         * Resolving the last open report about a match is also what releases
+         * the retention hold the report put on its recording — see
+         * [ModerationService.resolve]. Without this route that hold could only
+         * ever be set, so every reported match's packets were kept forever.
+         */
+        post("/v1/admin/reports/{id}/resolve") {
+            if (!isAdmin(call)) {
+                call.respond(HttpStatusCode.Forbidden, mapOf("error" to "admin token required"))
+                return@post
+            }
+            val id = runCatching { UUID.fromString(call.parameters["id"]) }.getOrNull()
+            if (id == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown report"))
+                return@post
+            }
+            val request = call.receive<ResolveReportRequest>()
+            val status = ReportStatus.parse(request.status)
+            if (status == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "unknown status '${request.status}'"))
+                return@post
+            }
+            val resolved = onStore {
+                deps.moderation.resolve(id, status, request.moderator, request.note)
+            }
+            if (resolved == null) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "unknown report"))
+                return@post
+            }
+            call.respond(resolved.toJson())
         }
 
         post("/v1/admin/bans/{uuid}") {

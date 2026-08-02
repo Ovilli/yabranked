@@ -45,7 +45,9 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib import error as urlerror
+from urllib import request as urlrequest
+from urllib.parse import parse_qs, quote, urlparse
 
 CONFIG_DIR = Path(os.environ.get("YABRANKED_ADMIN_HOME", Path.home() / ".yabranked-admin"))
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -55,6 +57,16 @@ UNIT = os.environ.get("YABRANKED_UNIT", "yabranked-backend")
 MATCH_LOG_DIR = Path(os.environ.get("YABRANKED_MATCH_LOG_DIR", "/var/lib/yabranked/match-logs"))
 REPLAY_DIR = Path(os.environ.get("YABRANKED_REPLAY_DIR", "/var/lib/yabranked/replays"))
 CONTAINER_PREFIX = "yabranked-match-"
+
+# The backend's own admin API, reached over loopback rather than through the
+# tunnel. This is the one thing here that is not the host — moderation state
+# lives in the database, and nothing on the filesystem can answer "which reports
+# are still open". The token is the same YABRANKED_ADMIN_TOKEN the backend is
+# started with; without it the Reports tab says so instead of failing blankly.
+BACKEND_URL = os.environ.get("YABRANKED_BACKEND_URL", "http://127.0.0.1:8080").rstrip("/")
+ADMIN_TOKEN = os.environ.get("YABRANKED_ADMIN_TOKEN")
+
+REPORT_STATUSES = ("OPEN", "REVIEWING", "ACTIONED", "DISMISSED")
 
 SESSION_COOKIE = "yabadmin"
 SESSION_TTL_SECONDS = 12 * 3600
@@ -279,6 +291,40 @@ def valid_container(name: str) -> bool:
     return name.startswith(CONTAINER_PREFIX) and UUID_RE.match(name[len(CONTAINER_PREFIX):]) is not None
 
 
+# --------------------------------------------------------------------------
+# the backend's admin API
+#
+# Loopback only. Everything here carries X-Admin-Token, which the backend
+# compares in constant time; a console started without the token can still show
+# logs and containers, so the absence is reported per request rather than
+# refused at startup.
+
+
+def backend_call(path: str, payload: dict | None = None, timeout: int = 10) -> tuple[int, object]:
+    """Returns (status, decoded body). Never raises — this is a UI."""
+    if not ADMIN_TOKEN:
+        return 0, {"error": "YABRANKED_ADMIN_TOKEN is not set for this console"}
+    body = json.dumps(payload).encode() if payload is not None else None
+    req = urlrequest.Request(
+        f"{BACKEND_URL}{path}",
+        data=body,
+        method="POST" if payload is not None else "GET",
+        headers={"X-Admin-Token": ADMIN_TOKEN, "Content-Type": "application/json"},
+    )
+    try:
+        with urlrequest.urlopen(req, timeout=timeout) as response:
+            raw = response.read().decode()
+            return response.status, (json.loads(raw) if raw else None)
+    except urlerror.HTTPError as exc:
+        raw = exc.read().decode(errors="replace")
+        try:
+            return exc.code, json.loads(raw)
+        except json.JSONDecodeError:
+            return exc.code, {"error": raw or exc.reason}
+    except (urlerror.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return 0, {"error": f"backend unreachable at {BACKEND_URL}: {exc}"}
+
+
 def host_status() -> dict:
     usage = shutil.disk_usage("/")
     replays = run(["du", "-sh", str(REPLAY_DIR)]).split("\t")[0].strip() if REPLAY_DIR.exists() else "—"
@@ -339,6 +385,7 @@ PAGE = """<!doctype html>
     <button data-tab="backend">Backend log</button>
     <button data-tab="matches">Match logs</button>
     <button data-tab="live">Live</button>
+    <button data-tab="reports">Reports</button>
   </nav>
   <span style="flex:1"></span>
   <span class="dim mono" id="clock"></span>
@@ -374,6 +421,24 @@ PAGE = """<!doctype html>
     <table id="ltable"><thead><tr><th>match</th><th>status</th><th>ports</th><th></th></tr></thead><tbody></tbody></table>
     <pre class="log hide" id="llog"></pre>
   </section>
+
+  <section id="tab-reports" class="hide">
+    <div class="row">
+      <select id="rstatus">
+        <option value="OPEN" selected>Open</option>
+        <option value="REVIEWING">Reviewing</option>
+        <option value="ACTIONED">Actioned</option>
+        <option value="DISMISSED">Dismissed</option>
+        <option value="">All</option>
+      </select>
+      <input type="text" id="rmod" placeholder="your name (recorded on the decision)">
+      <button class="act" id="rrefresh">Refresh</button>
+      <span class="dim" id="rstate"></span>
+    </div>
+    <table id="rtable"><thead><tr>
+      <th>accused</th><th>reason</th><th>filed</th><th>state</th><th>match</th><th></th>
+    </tr></thead><tbody></tbody></table>
+  </section>
 </main>
 <script>
 const CSRF = "__CSRF__";
@@ -382,11 +447,12 @@ const esc = s => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['overview','backend','matches','live'].forEach(t =>
+  ['overview','backend','matches','live','reports'].forEach(t =>
     $('#tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
   if (b.dataset.tab === 'overview') loadStatus();
   if (b.dataset.tab === 'matches') loadMatches();
   if (b.dataset.tab === 'live') loadLive();
+  if (b.dataset.tab === 'reports') loadReports();
 });
 
 setInterval(() => $('#clock').textContent = new Date().toLocaleTimeString(), 1000);
@@ -470,6 +536,62 @@ async function loadLive() {
   });
 }
 $('#lrefresh').onclick = loadLive;
+
+// Reports. The queue defaults to what still needs a decision — unfiltered it
+// mixes fresh accusations in with every one already judged, which is how a
+// moderation queue reads as endless.
+const AGO = t => {
+  const s = (Date.now() - Date.parse(t)) / 1000;
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+};
+async function loadReports() {
+  const status = $('#rstatus').value;
+  $('#rstate').textContent = 'loading…';
+  const r = await fetch('/api/reports?status=' + encodeURIComponent(status));
+  const body = await r.json();
+  if (!r.ok) {
+    $('#rstate').innerHTML = `<span class="bad">${esc(body.error || 'failed')}</span>`;
+    $('#rtable tbody').innerHTML = '';
+    return;
+  }
+  $('#rstate').textContent = body.length ? '' : 'nothing here';
+  $('#rtable tbody').innerHTML = body.map(r => {
+    // Repeat offenders are the reason to look. One report is noise.
+    const repeat = r.reportsAgainst > 1
+      ? ` <span class="bad">×${r.reportsAgainst}</span>` : '';
+    const decided = r.resolvedBy
+      ? `<span class="dim"> by ${esc(r.resolvedBy)}</span>` : '';
+    const actions = ['REVIEWING','ACTIONED','DISMISSED']
+      .filter(s => s !== r.status)
+      .map(s => `<button class="act ${s === 'ACTIONED' ? 'danger' : ''}"
+                   data-report="${r.id}" data-status="${s}">${s[0] + s.slice(1).toLowerCase()}</button>`)
+      .join(' ');
+    return `<tr>
+      <td class="mono">${esc(r.accused)}${repeat}</td>
+      <td>${esc(r.reason)}</td>
+      <td class="dim">${AGO(r.createdAt)}</td>
+      <td>${esc(r.status)}${decided}</td>
+      <td class="mono dim">${esc(r.matchId)}</td>
+      <td>${actions}</td></tr>`;
+  }).join('') || '<tr><td colspan="6" class="dim">no reports in this state</td></tr>';
+
+  document.querySelectorAll('[data-report]').forEach(b => b.onclick = async () => {
+    const status = b.dataset.status;
+    const note = status === 'REVIEWING' ? '' : (prompt(`Note for marking this ${status}?`) ?? null);
+    if (note === null && status !== 'REVIEWING') return;
+    const body = new URLSearchParams({
+      csrf: CSRF, id: b.dataset.report, status, moderator: $('#rmod').value, note: note || '',
+    });
+    const r = await fetch('/action/resolve-report', { method: 'POST', body });
+    const out = await r.json();
+    if (!r.ok) alert(out.message);
+    loadReports();
+  });
+}
+$('#rrefresh').onclick = loadReports;
+$('#rstatus').onchange = loadReports;
 
 loadStatus();
 </script>
@@ -595,6 +717,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(live_containers())
         if path == "/api/container":
             return self.send_json({"text": container_logs((query.get("name") or [""])[0])})
+        if path == "/api/reports":
+            status = (query.get("status") or [""])[0].upper()
+            suffix = f"&status={quote(status)}" if status in REPORT_STATUSES else ""
+            code, body = backend_call(f"/v1/admin/reports?limit=200{suffix}")
+            if code != 200:
+                return self.send_json({"error": (body or {}).get("error", f"backend said {code}")}, 502)
+            return self.send_json(body)
         if path == "/stream/journal":
             return self.stream_journal((query.get("q") or [""])[0] or None)
 
@@ -635,6 +764,26 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/logout":
             return self.redirect("/login", {"Set-Cookie": f"{SESSION_COOKIE}=; Path=/; Max-Age=0"})
+
+        if path == "/action/resolve-report":
+            report_id = params.get("id", "")
+            status = params.get("status", "").upper()
+            if not UUID_RE.match(report_id):
+                return self.send_json({"message": "invalid report id"}, 400)
+            if status not in REPORT_STATUSES:
+                return self.send_json({"message": f"unknown status {status}"}, 400)
+            audit(self.client_ip(), "resolve-report", f"{report_id} -> {status}")
+            code, body = backend_call(
+                f"/v1/admin/reports/{report_id}/resolve",
+                {
+                    "status": status,
+                    "moderator": params.get("moderator", "") or None,
+                    "note": params.get("note", "") or None,
+                },
+            )
+            if code != 200:
+                return self.send_json({"message": (body or {}).get("error", f"backend said {code}")}, 502)
+            return self.send_json({"message": f"report marked {status}"})
 
         if path == "/action/teardown":
             name = params.get("name", "")

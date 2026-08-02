@@ -584,10 +584,28 @@ class PostgresMatchStore(private val db: Database) : MatchStore {
 
 class PostgresReportStore(private val db: Database) : ReportStore {
 
+    private fun ResultSet.toReport() = ReportRecord(
+        id = getObject("id", UUID::class.java),
+        matchId = getObject("match_id", UUID::class.java),
+        reporter = getObject("reporter", UUID::class.java),
+        accused = getObject("accused", UUID::class.java),
+        reason = getString("reason"),
+        createdAt = instant("created_at")!!,
+        // A status this process does not know is not a reason to fail the whole
+        // listing — an older backend reading a newer row still has to render it.
+        status = ReportStatus.parse(getString("status")) ?: ReportStatus.OPEN,
+        resolvedAt = instant("resolved_at"),
+        resolvedBy = getString("resolved_by"),
+        resolutionNote = getString("resolution_note"),
+    )
+
     override fun insert(record: ReportRecord) {
         db.withConnection { c ->
             c.prepareStatement(
-                "INSERT INTO reports (id, match_id, reporter, accused, reason, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+                """
+                INSERT INTO reports (id, match_id, reporter, accused, reason, created_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """.trimIndent()
             ).use { s ->
                 s.setObject(1, record.id)
                 s.setObject(2, record.matchId)
@@ -595,26 +613,70 @@ class PostgresReportStore(private val db: Database) : ReportStore {
                 s.setObject(4, record.accused)
                 s.setString(5, record.reason)
                 s.setTimestamp(6, Timestamp.from(record.createdAt))
+                s.setString(7, record.status.name)
                 s.executeUpdate()
             }
         }
     }
 
-    override fun list(limit: Int): List<ReportRecord> = db.withConnection { c ->
-        c.prepareStatement("SELECT * FROM reports ORDER BY created_at DESC LIMIT ?").use { s ->
-            s.setInt(1, limit)
-            s.executeQuery().use { r ->
-                buildList {
-                    while (r.next()) add(
-                        ReportRecord(
-                            id = r.getObject("id", UUID::class.java),
-                            matchId = r.getObject("match_id", UUID::class.java),
-                            reporter = r.getObject("reporter", UUID::class.java),
-                            accused = r.getObject("accused", UUID::class.java),
-                            reason = r.getString("reason"),
-                            createdAt = r.instant("created_at")!!,
-                        )
-                    )
+    override fun list(limit: Int, status: ReportStatus?): List<ReportRecord> = db.withConnection { c ->
+        val where = if (status == null) "" else "WHERE status = ? "
+        c.prepareStatement("SELECT * FROM reports ${where}ORDER BY created_at DESC LIMIT ?").use { s ->
+            var index = 1
+            if (status != null) s.setString(index++, status.name)
+            s.setInt(index, limit)
+            s.executeQuery().use { r -> buildList { while (r.next()) add(r.toReport()) } }
+        }
+    }
+
+    override fun get(id: UUID): ReportRecord? = db.withConnection { c ->
+        c.prepareStatement("SELECT * FROM reports WHERE id = ?").use { s ->
+            s.setObject(1, id)
+            s.executeQuery().use { r -> if (r.next()) r.toReport() else null }
+        }
+    }
+
+    override fun resolve(
+        id: UUID,
+        status: ReportStatus,
+        moderator: String?,
+        note: String?,
+        at: Instant,
+    ): ReportRecord? = db.withConnection { c ->
+        // COALESCE so that omitting the moderator or the note on a later
+        // transition keeps what an earlier one recorded, matching the
+        // in-memory store — a DISMISSED that follows a REVIEWING should not
+        // erase who claimed it.
+        c.prepareStatement(
+            """
+            UPDATE reports
+               SET status = ?,
+                   resolved_at = ?,
+                   resolved_by = COALESCE(?, resolved_by),
+                   resolution_note = COALESCE(?, resolution_note)
+             WHERE id = ?
+         RETURNING *
+            """.trimIndent()
+        ).use { s ->
+            s.setString(1, status.name)
+            s.setTimestamp(2, if (status.open) null else Timestamp.from(at))
+            s.setString(3, moderator)
+            s.setString(4, note)
+            s.setObject(5, id)
+            s.executeQuery().use { r -> if (r.next()) r.toReport() else null }
+        }
+    }
+
+    override fun countsAgainst(accused: Collection<UUID>): Map<UUID, Int> {
+        if (accused.isEmpty()) return emptyMap()
+        val wanted = accused.toSet()
+        return db.withConnection { c ->
+            c.prepareStatement(
+                "SELECT accused, count(*) AS n FROM reports WHERE accused = ANY (?) GROUP BY accused"
+            ).use { s ->
+                s.setArray(1, c.createArrayOf("uuid", wanted.toTypedArray()))
+                s.executeQuery().use { r ->
+                    buildMap { while (r.next()) put(r.getObject("accused", UUID::class.java), r.getInt("n")) }
                 }
             }
         }
@@ -642,20 +704,7 @@ class PostgresReportStore(private val db: Database) : ReportStore {
     override fun forMatch(matchId: UUID): List<ReportRecord> = db.withConnection { c ->
         c.prepareStatement("SELECT * FROM reports WHERE match_id = ? ORDER BY created_at").use { s ->
             s.setObject(1, matchId)
-            s.executeQuery().use { r ->
-                buildList {
-                    while (r.next()) add(
-                        ReportRecord(
-                            id = r.getObject("id", UUID::class.java),
-                            matchId = r.getObject("match_id", UUID::class.java),
-                            reporter = r.getObject("reporter", UUID::class.java),
-                            accused = r.getObject("accused", UUID::class.java),
-                            reason = r.getString("reason"),
-                            createdAt = r.instant("created_at")!!,
-                        )
-                    )
-                }
-            }
+            s.executeQuery().use { r -> buildList { while (r.next()) add(r.toReport()) } }
         }
     }
 }

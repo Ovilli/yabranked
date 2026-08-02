@@ -230,6 +230,42 @@ data class LadderEntry(
     val player: PlayerRecord?,
 )
 
+/**
+ * Where a report has got to. Reports used to have no state at all: filing one
+ * wrote a row, `GET /v1/admin/reports` listed the newest fifty, and nothing
+ * anywhere recorded that a moderator had looked. The consequences were not
+ * cosmetic — the same account could be reported indefinitely with no way to
+ * see it had already been judged, and the retention hold a report puts on the
+ * match recording had no event that could ever lift it, so every reported
+ * match's packets were kept forever.
+ *
+ * [OPEN] and [REVIEWING] are unresolved and hold the recording; [ACTIONED] and
+ * [DISMISSED] are decisions and release it.
+ */
+enum class ReportStatus {
+    /** Filed, nobody has looked. */
+    OPEN,
+
+    /** A moderator has claimed it. Still holds the recording. */
+    REVIEWING,
+
+    /** Upheld — the accusation was judged correct. */
+    ACTIONED,
+
+    /** Rejected, or not worth acting on. */
+    DISMISSED,
+    ;
+
+    /** True while the report still needs a decision, which is what pins the replay. */
+    val open: Boolean get() = this == OPEN || this == REVIEWING
+
+    companion object {
+        /** Case-insensitive parse for the admin API; null for anything unknown. */
+        fun parse(raw: String?): ReportStatus? =
+            raw?.let { value -> entries.firstOrNull { it.name.equals(value, ignoreCase = true) } }
+    }
+}
+
 data class ReportRecord(
     val id: UUID,
     val matchId: UUID,
@@ -237,6 +273,16 @@ data class ReportRecord(
     val accused: UUID,
     val reason: String,
     val createdAt: Instant,
+    val status: ReportStatus = ReportStatus.OPEN,
+    val resolvedAt: Instant? = null,
+    /**
+     * Who decided it. The admin console has no user accounts — it is one
+     * password on the LAN — so this is the free-text name the moderator gave,
+     * kept because "which of us dismissed this" is the question that gets
+     * asked and an unauthenticated string still answers it.
+     */
+    val resolvedBy: String? = null,
+    val resolutionNote: String? = null,
 )
 
 /**
@@ -378,7 +424,34 @@ interface MatchStore {
 
 interface ReportStore {
     fun insert(record: ReportRecord)
-    fun list(limit: Int): List<ReportRecord>
+
+    /** Newest first. [status] null lists every state; see [ReportStatus]. */
+    fun list(limit: Int, status: ReportStatus? = null): List<ReportRecord>
+
+    fun get(id: UUID): ReportRecord?
+
+    /**
+     * Records a moderator's decision. Returns the updated row, or null if
+     * [id] names no report — the route needs to tell those apart to answer 404.
+     */
+    fun resolve(
+        id: UUID,
+        status: ReportStatus,
+        moderator: String?,
+        note: String?,
+        at: Instant,
+    ): ReportRecord?
+
+    /**
+     * How many reports each of [accused] has ever collected.
+     *
+     * The admin list is ordered by recency, which surfaces whoever was
+     * reported last rather than whoever is reported constantly. One report is
+     * noise; the ninth about the same account is the signal, and it was
+     * invisible without counting.
+     */
+    fun countsAgainst(accused: Collection<UUID>): Map<UUID, Int>
+
     fun existsFor(matchId: UUID, reporter: UUID): Boolean
 
     /**
@@ -509,8 +582,37 @@ class InMemoryReportStore : ReportStore {
         reports[record.id] = record
     }
 
-    override fun list(limit: Int): List<ReportRecord> =
-        reports.values.sortedByDescending { it.createdAt }.take(limit)
+    override fun list(limit: Int, status: ReportStatus?): List<ReportRecord> =
+        reports.values
+            .filter { status == null || it.status == status }
+            .sortedByDescending { it.createdAt }
+            .take(limit)
+
+    override fun get(id: UUID): ReportRecord? = reports[id]
+
+    override fun resolve(
+        id: UUID,
+        status: ReportStatus,
+        moderator: String?,
+        note: String?,
+        at: Instant,
+    ): ReportRecord? = reports.computeIfPresent(id) { _, current ->
+        current.copy(
+            status = status,
+            // Claiming a report is not deciding it, so REVIEWING carries no
+            // resolution timestamp — otherwise "resolved 3 days ago" would be
+            // shown for something nobody has finished looking at.
+            resolvedAt = if (status.open) null else at,
+            resolvedBy = moderator ?: current.resolvedBy,
+            resolutionNote = note ?: current.resolutionNote,
+        )
+    }
+
+    override fun countsAgainst(accused: Collection<UUID>): Map<UUID, Int> {
+        if (accused.isEmpty()) return emptyMap()
+        val wanted = accused.toSet()
+        return reports.values.filter { it.accused in wanted }.groupingBy { it.accused }.eachCount()
+    }
 
     override fun existsFor(matchId: UUID, reporter: UUID): Boolean =
         reports.values.any { it.matchId == matchId && it.reporter == reporter }

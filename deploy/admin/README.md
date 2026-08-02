@@ -26,9 +26,16 @@ session secret, which logs every browser out.
 ## Run it
 
 ```sh
-ssh "$HOST" 'setsid nohup python3 ~/yabranked-admin/app.py serve \
+ssh "$HOST" 'YABRANKED_ADMIN_TOKEN=… setsid nohup python3 ~/yabranked-admin/app.py serve \
     >> ~/yabranked-admin/console.log 2>&1 &'
 ```
+
+`YABRANKED_ADMIN_TOKEN` is the same shared secret the backend is started with,
+and it is what the **Reports** tab needs: moderation state lives in the
+database, so that one tab asks the backend over loopback
+(`YABRANKED_BACKEND_URL`, default `http://127.0.0.1:8080`) rather than reading
+the host. Everything else here works without it, and the tab says the token is
+missing rather than failing blankly.
 
 Persistence is a `@reboot` crontab line rather than a systemd unit, because
 `sudo` on this host wants a password and a user unit would need lingering
@@ -44,10 +51,21 @@ Then open `http://<host>:8091` on the LAN (or the Tailscale address).
 | Backend log | `journalctl -u yabranked-backend`, with a regex filter and a live follow (SSE) |
 | Match logs | the files the backend copies out of each container before `docker rm -f` |
 | Live | running `yabranked-match-*` containers, their logs, and teardown |
+| Reports | the moderation queue, over the backend's admin API |
 
-Teardown is the only mutating action. It is a POST, it carries a CSRF token, it
-asks for confirmation, and it is written to `~/.yabranked-admin/audit.log`
-along with every login attempt.
+The Reports tab defaults to **open** reports rather than all of them: a queue
+that lists every accusation ever filed alongside the ones nobody has read is
+how it comes to read as endless. `×N` next to an accused is how many reports
+that account has ever collected — one report is noise, and the ninth is the
+reason to look. Marking a report `Actioned` or `Dismissed` is also what
+releases the retention hold the report put on the match recording; until this
+existed, that hold could only ever be set, so every reported match's packet
+capture was kept forever.
+
+Teardown and resolving a report are the mutating actions. Both are POSTs, both
+carry a CSRF token, and both are written to `~/.yabranked-admin/audit.log`
+along with every login attempt. Neither bans anyone — `POST /v1/admin/bans/…`
+is still a deliberate, separate call.
 
 ## The part to be honest about
 

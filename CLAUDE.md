@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 ./gradlew test                                  # all unit + API tests
+./gradlew :proto:test :backend:test :client:test  # what CI runs (agent needs mavenLocal, see below)
 ./gradlew :backend:test                         # one module
 ./gradlew :backend:test --tests '*MatchServiceTest*'          # one class
 ./gradlew :backend:test --tests '*MatchServiceTest.settle*'   # one test
@@ -27,7 +28,15 @@ Match-server image (needs the YAB repo checked out at `../bingo`, override with 
 
 ### Toolchains
 
-`proto` and `backend` target JVM 21; `agent` and `client` target JVM 25 (MC 26.2 requires it), so the **Gradle JVM itself must be Java 25**. `gradle.properties` pins `org.gradle.java.home` to an absolute path under `/home/ovilli/.gradle/jdks/…` — on any other machine that line has to be repointed or removed.
+`proto` and `backend` target JVM 21; `agent` and `client` target JVM 25 (MC 26.2 requires it), so the **Gradle JVM itself must be Java 25**. That requirement lives in `gradle/gradle-daemon-jvm.properties` (`toolchainVersion=25` plus a per-platform download URL), which Gradle reads *before* it starts the daemon and auto-provisions from — so any launcher JVM works and nothing has to be installed first. Regenerate it with `./gradlew updateDaemonJvm --jvm-version=25`.
+
+It used to be `org.gradle.java.home` in `gradle.properties` pointing at an absolute path under `/home/ovilli/.gradle/jdks/…`, which meant the build only worked on that one machine and had to be edited out by hand everywhere else — CI included, which is part of why there was none.
+
+### CI
+
+`.github/workflows/ci.yml` runs `:proto:test :backend:test` in one job and `:client:test` (Loom, so a Minecraft download) in another, plus a syntax gate on `deploy/admin/app.py`. **`agent` is deliberately not built**: it compiles against `me.jfenn.bingo:api` from mavenLocal, which the workflow has no YAB checkout to publish.
+
+The runner having Docker is load-bearing — `PostgresStoreTest` `assumeTrue`-skips silently without it, so CI is the only place the SQL stores are exercised at all. A step after the tests reads the JUnit XML and raises a workflow warning if that class skipped, because a silent skip is indistinguishable from a pass.
 
 ## Architecture
 
@@ -58,6 +67,18 @@ Four Gradle modules, one shared wire model:
 - **`Presence`** — process-local with a 90s TTL; never persisted.
 
 `WS /v1/party` is the party control channel and also how invites and friend requests reach an online player. Only the leader's queue socket holds the party's ticket; every other member's client opens a socket too (as an *observer*) purely so the backend can tell them where the match server is.
+
+### Moderation
+
+`moderation/ModerationService.kt` owns both halves of a report: who the accused is, and what a moderator decided.
+
+**A report has a lifecycle, and the reason is retention rather than tidiness.** `ReportStatus` is `OPEN | REVIEWING | ACTIONED | DISMISSED`, and `ReportStatus.open` (the first two) is what pins the match recording. Filing sets `replays.under_review`; before `POST /v1/admin/reports/{id}/resolve` existed nothing could ever clear it, so every reported match's packet capture — tens of megabytes a player — was kept forever on a Pi with a nearly full SD card. Nothing recorded that a moderator had looked, either, so the same account could be reported indefinitely with no way to see it had already been judged.
+
+- **The hold is released per match, not per report.** Two players reporting the same opponent produce two rows and the recording is the evidence for both, so `resolve` re-reads `forMatch` and only clears `under_review` when nothing there is still open. `ReplayApi.ensureRow` asks the same question (`any { it.status.open }`) rather than "are there any reports", or a row created after a decision would silently pin it again.
+- **`REVIEWING` is a claim, not a decision**: it holds the recording and writes no `resolvedAt`. A later transition that names no moderator or note keeps what an earlier one recorded (`COALESCE` in SQL, `?:` in memory).
+- **`GET /v1/admin/reports` takes `?status=`, and an unknown one is a 400.** Unfiltered, the queue mixes fresh accusations in with everything already judged, which is how it reads as endless. Each row carries `reportsAgainst` — every report ever filed against that account — because the list is ordered by recency, which surfaces whoever was reported *last* rather than whoever is reported constantly.
+- **Migration V6 replaced `UNIQUE (match_id, reporter)` with `(match_id, reporter, accused)`.** The application rule became one report per *accused* per match when team formats landed and `ReportStore` was changed to match; the baseline constraint was not, so reporting a second opponent in a 4v4 passed the check and then died on the insert. Only Postgres was affected — every test ran against the in-memory store, which has no constraints. It is the standing example of why `PostgresStoreTest` skipping silently is a problem.
+- Admin wire types (`ResolveReportRequest`, `AdminReportJson`) are declared in `api/Api.kt`, **not** `:proto`: the player client never sees an admin route, and putting them in the shared module would ship the moderation vocabulary in every mod jar and make it a compatibility surface. The only consumer is `deploy/admin/`, whose Reports tab calls the backend over loopback with `YABRANKED_ADMIN_TOKEN`.
 
 ### Rating and stats, per mode
 
@@ -150,7 +171,7 @@ All `BackendClient` methods block. Call them from `YabRankedClient.workers` (a s
 - **A player head needs the profile fetched first.** `SkinManager.get` reads the `textures` property off the `GameProfile` it is handed and resolves to `MinecraftProfileTextures.EMPTY` when there is none — it never calls Mojang itself. `PlayerHeads` therefore does `sessionService.fetchProfile(uuid, true)` on the background executor and hands the *result* to the skin manager on the render thread; a bare `GameProfile(uuid, name)` renders every player, signed in or not, as the default Steve/Alex.
 - **There is one notification stack.** `RankedNotice` owns the top-right column and `RankedToast` is now only a way into it; it used to be a vanilla `Toast` drawn by the game's own manager, so two notifications raised through different calls drew over each other. The stack is drawn from **one place** — `YabRankedClient`'s `ScreenEvents.afterExtract` hook for every screen, plus `RankedHud` in-world — never by a screen for itself, or a screen stacked on another paints it twice. The dismiss "×" is the only thing there that consumes a click.
 - **`MatchHistoryEntry.rated` is not `format.ranked`.** A party may play a rated format unrated. `MatchService.settleLocked` only writes `ratingAAfter`/`ratingBAfter` when the ladder actually moved, so an unrated match reports no movement at all rather than the swing it *would* have had; every screen that draws a delta checks `rated` first.
-- **A player can be reported from anywhere they are visible.** `POST /v1/reports` takes a `matchId` (post-match) *or* an `accused` uuid (from a profile), and resolves the other from the match roster — `MatchStore.between` finds the most recent shared match. The accused is always derived server-side; naming someone who was not on the other side is refused, not recorded.
+- **A player can be reported from anywhere they are visible.** `POST /v1/reports` takes a `matchId` (post-match) *or* an `accused` uuid (from a profile), and resolves the other from the match roster — `MatchStore.between` finds the most recent shared match. The accused is always derived server-side; naming someone who was not on the other side is refused, not recorded. Those rules live in `moderation/ModerationService.kt`, not in the route.
 - **Icon atlas**: `tools/gen_icons.py` appends glyphs to `icons.png`; indices are baked into `ui/Icons.kt`, so glyphs are only ever appended and `ICON_COUNT` must match the width the script prints.
 
 ## Environment variables

@@ -124,6 +124,7 @@ class SchemaMigrator(
             Migration(3, "social", "/migrations/V3__social.sql"),
             Migration(4, "replays", "/migrations/V4__replays.sql"),
             Migration(5, "replay_packet_capture", "/migrations/V5__replay_packet_capture.sql"),
+            Migration(6, "report_resolution", "/migrations/V6__report_resolution.sql"),
         )
 
         private const val CREATE_VERSION_TABLE = """

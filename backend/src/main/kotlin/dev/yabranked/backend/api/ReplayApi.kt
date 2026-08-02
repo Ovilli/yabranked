@@ -146,7 +146,10 @@ fun Route.replayApi(deps: ApiDependencies) {
                 expiresAt = now.plus(Duration.ofDays(deps.replayPolicy.retentionDays)),
                 // A match already reported before its replay landed still gets the
                 // hold: the report is what matters, not the order the two arrived in.
-                underReview = deps.reports.forMatch(match.id).isNotEmpty(),
+                // Only an *unresolved* report holds it — a report that has been
+                // judged has released the recording, and a row created afterwards
+                // must not silently pin it again.
+                underReview = deps.reports.forMatch(match.id).any { it.status.open },
             )
         }
     }
@@ -412,6 +415,9 @@ fun Route.replayApi(deps: ApiDependencies) {
                     "sizeBytes" to record.sizeBytes.toString(),
                     "complete" to record.complete.toString(),
                     "reports" to reports.size.toString(),
+                    // What is actually holding this recording, as opposed to how
+                    // many times it has ever been reported.
+                    "openReports" to reports.count { it.status.open }.toString(),
                     "accused" to reports.joinToString(",") { it.accused.toString() },
                 )
             }

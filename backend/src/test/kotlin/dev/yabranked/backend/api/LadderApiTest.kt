@@ -234,6 +234,89 @@ class LadderApiTest {
     }
 
     @Test
+    fun `a moderator can resolve a report, and the queue can be filtered to open ones`() = testApplication {
+        // Reports used to be write-only: filed, listed, never touched again. A
+        // moderator could not tell a fresh accusation from one already judged,
+        // and the retention hold a report puts on the recording had no event
+        // that could ever lift it.
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+
+        val a = UUID.randomUUID()
+        val b = UUID.randomUUID()
+        val match = playedMatch(a, b)
+        client.post("/v1/reports") {
+            contentType(ContentType.Application.Json)
+            header("Authorization", "Bearer ${tokens.issue(a)}")
+            setBody(ReportRequest(match.id.toString(), "cheating"))
+        }
+
+        val open: List<AdminReportJson> = client.get("/v1/admin/reports?status=open") {
+            header("X-Admin-Token", "admin-secret")
+        }.body()
+        assertEquals(1, open.size)
+        assertEquals("OPEN", open[0].status)
+        assertEquals(1, open[0].reportsAgainst)
+
+        // resolving requires the admin token like everything else here
+        assertEquals(
+            HttpStatusCode.Forbidden,
+            client.post("/v1/admin/reports/${open[0].id}/resolve") {
+                contentType(ContentType.Application.Json)
+                setBody(ResolveReportRequest("DISMISSED"))
+            }.status,
+        )
+
+        val resolved: AdminReportJson = client.post("/v1/admin/reports/${open[0].id}/resolve") {
+            contentType(ContentType.Application.Json)
+            header("X-Admin-Token", "admin-secret")
+            setBody(ResolveReportRequest(status = "dismissed", moderator = "ovilli", note = "no evidence"))
+        }.body()
+        assertEquals("DISMISSED", resolved.status)
+        assertEquals("ovilli", resolved.resolvedBy)
+        assertTrue(resolved.resolvedAt != null, "a decided report must record when")
+
+        val stillOpen: List<AdminReportJson> = client.get("/v1/admin/reports?status=open") {
+            header("X-Admin-Token", "admin-secret")
+        }.body()
+        assertTrue(stillOpen.isEmpty(), "a dismissed report must leave the queue")
+        assertEquals(
+            1,
+            client.get("/v1/admin/reports") { header("X-Admin-Token", "admin-secret") }
+                .body<List<AdminReportJson>>().size,
+            "unfiltered still lists it — resolving is not deleting",
+        )
+    }
+
+    @Test
+    fun `an unknown report or status is refused rather than guessed at`() = testApplication {
+        application { rankedApi(deps()) }
+        val client = jsonClient()
+
+        assertEquals(
+            HttpStatusCode.BadRequest,
+            client.get("/v1/admin/reports?status=pending") { header("X-Admin-Token", "admin-secret") }.status,
+            "an unknown status must not silently list everything",
+        )
+        assertEquals(
+            HttpStatusCode.NotFound,
+            client.post("/v1/admin/reports/${UUID.randomUUID()}/resolve") {
+                contentType(ContentType.Application.Json)
+                header("X-Admin-Token", "admin-secret")
+                setBody(ResolveReportRequest("ACTIONED"))
+            }.status,
+        )
+        assertEquals(
+            HttpStatusCode.BadRequest,
+            client.post("/v1/admin/reports/${UUID.randomUUID()}/resolve") {
+                contentType(ContentType.Application.Json)
+                header("X-Admin-Token", "admin-secret")
+                setBody(ResolveReportRequest("banhammer"))
+            }.status,
+        )
+    }
+
+    @Test
     fun `a report from a profile resolves the match itself`() = testApplication {
         application { rankedApi(deps()) }
         val client = jsonClient()
