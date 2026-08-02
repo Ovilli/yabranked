@@ -51,6 +51,10 @@ class RankedScreen(
 
     override fun layout() {
         RankedState.onRankedScreen = true
+        // Nothing in the handshake needs the player, so opening this screen is
+        // enough of an intent to sign in. It is rate-limited inside RankedAuth,
+        // which matters here: layout() runs again on every rebuildWidgets().
+        RankedAuth.ensureSignedIn(minecraft) { refresh() }
         // Invites and friend requests are server pushes, so the socket has
         // to be open before one arrives — not opened in reaction to one.
         if (RankedState.isAuthenticated) RankedParty.connect()
@@ -209,54 +213,9 @@ class RankedScreen(
     }
 
     private fun login() {
-        val minecraft = this.minecraft
-        RankedState.statusMessage = "Signing in…"
-
-        val user = minecraft.user
-        val sessionService = minecraft.services().sessionService()
-        val backend = BackendClient(YabRankedClient.backendUrl, YabRankedClient.modVersion)
-
-        YabRankedClient.workers.execute {
-            val result = backend.authenticate(user.name) { serverId ->
-                sessionService.joinServer(user.profileId, user.accessToken, serverId)
-            }
-            minecraft.execute {
-                when (result) {
-                    is BackendClient.AuthResult.Ok -> {
-                        RankedState.backend = backend
-                        RankedState.profile = result.session.profile
-                        // The server is authoritative for these two prefs; mirror
-                        // them into the local toggles so the options screen shows
-                        // the real state and doesn't clobber it on next save.
-                        RankedState.hideOwnFlag = result.session.profile.hideFlag
-                        RankedState.hideElo = result.session.profile.hideRating
-                        RankedState.statusMessage = null
-                        // The party socket is also the channel invites and
-                        // friend requests arrive on, so it opens as soon as
-                        // there is a session — not when a party is created.
-                        RankedParty.connect()
-                        // Populate the win streak shown on the profile card.
-                        val uuid = result.session.profile.uuid
-                        YabRankedClient.workers.execute {
-                            val hist = backend.fetchHistory(uuid, limit = 20).orElse(emptyList())
-                            val friends = backend.fetchFriends()
-                            minecraft.execute {
-                                RankedState.winStreak = result.session.profile.currentStreak
-                                    ?: RankedState.currentWinStreak(hist)
-                                RankedState.friendRequests =
-                                    friends.orElse(FriendListResponse()).incoming.size
-                                refresh()
-                            }
-                        }
-                    }
-                    is BackendClient.AuthResult.Outdated ->
-                        RankedState.statusMessage = "§c${result.message}"
-                    is BackendClient.AuthResult.Failed ->
-                        RankedState.statusMessage = "§c${result.message}"
-                }
-                refresh()
-            }
-        }
+        // The sign-in itself lives in RankedAuth, because the button is no
+        // longer its only caller: an expired token signs itself back in.
+        RankedAuth.signIn(minecraft) { refresh() }
     }
 
     private fun toggleQueue() {

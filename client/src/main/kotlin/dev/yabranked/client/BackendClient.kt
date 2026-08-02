@@ -40,6 +40,29 @@ class BackendClient(
     var session: SessionResponse? = null
         private set
 
+    /**
+     * Called when an authenticated request is refused, just after the dead
+     * session has been dropped.
+     *
+     * A token expires on its own schedule and nothing on screen was told. The
+     * client kept a session object that no longer worked, so `isAuthenticated`
+     * stayed true, the ranked menu went on hiding its "Log in" button, and every
+     * screen answered "Session expired — sign in again" with no way to do it.
+     */
+    var onUnauthorized: (() -> Unit)? = null
+
+    /**
+     * Drop the dead session and tell whoever is listening.
+     *
+     * Idempotent: several screens poll at once, so one expiry produces a burst
+     * of 401s and only the first of them is news.
+     */
+    private fun sessionRefused() {
+        if (session == null) return
+        session = null
+        onUnauthorized?.invoke()
+    }
+
     sealed interface AuthResult {
         data class Ok(val session: SessionResponse) : AuthResult
         data class Outdated(val message: String) : AuthResult
@@ -309,11 +332,13 @@ class BackendClient(
                 .timeout(Duration.ofSeconds(10))
                 .build()
             val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-            if (response.statusCode() in 200..299) null
+            val status = response.statusCode()
+            if (status == 401 || status == 403) sessionRefused()
+            if (status in 200..299) null
             // The backend's refusals are written for players ("you can only add
             // players you have played with"), so they are shown as-is rather
             // than replaced with a status code.
-            else errorMessageOf(response.body()) ?: "Request failed (${response.statusCode()})"
+            else errorMessageOf(response.body()) ?: "Request failed ($status)"
         } catch (e: Exception) {
             log.warn("$method $path failed", e)
             "Ranked backend unreachable"
@@ -341,7 +366,10 @@ class BackendClient(
         }
         val status = response.statusCode()
         return when {
-            status == 401 || status == 403 -> Fetch.Unauthorized
+            status == 401 || status == 403 -> {
+                sessionRefused()
+                Fetch.Unauthorized
+            }
             status == 426 -> Fetch.Outdated
             status in 200..299 -> runCatching { Fetch.Ok(decode(response.body())) }
                 .getOrElse { Fetch.Failed(status) }
