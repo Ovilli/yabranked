@@ -47,20 +47,40 @@ class PostgresStoreTest {
         )
         check(exit == 0) { "could not start postgres container: $out" }
 
-        // wait for postgres to accept connections
+        // Waiting for the server and migrating onto it are separate steps, and
+        // conflating them cost an afternoon. Both used to sit inside one retry
+        // loop that caught everything and built a fresh Hikari pool per attempt
+        // without closing the last one — so a migration that fails
+        // deterministically was retried once a second for a minute, leaking a
+        // pool each time, until postgres ran out of connections. What surfaced
+        // was `FATAL: sorry, too many clients already` sixty seconds later,
+        // with the actual migration error discarded as an earlier `lastError`.
+        //
+        // Connectivity is the only thing worth retrying: it is the only part
+        // that is slow for a legitimate reason.
+        val url = "jdbc:postgresql://localhost:55432/yabranked"
         val deadline = System.currentTimeMillis() + 60_000
         var lastError: Exception? = null
         while (System.currentTimeMillis() < deadline) {
-            try {
-                db = Database("jdbc:postgresql://localhost:55432/yabranked", "postgres", "test")
-                db.migrate()
-                return
+            val candidate = try {
+                Database(url, "postgres", "test")
             } catch (e: Exception) {
                 lastError = e
                 Thread.sleep(1000)
+                continue
             }
+            // Connected. A migration failure from here is a broken migration,
+            // not a slow container, so it is thrown rather than retried.
+            db = candidate
+            try {
+                candidate.migrate()
+            } catch (e: Exception) {
+                candidate.close()
+                throw e
+            }
+            return
         }
-        throw IllegalStateException("postgres did not become ready", lastError)
+        throw IllegalStateException("postgres did not accept connections within 60s", lastError)
     }
 
     @AfterAll

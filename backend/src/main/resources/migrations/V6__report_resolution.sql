@@ -33,21 +33,25 @@ ALTER TABLE reports ADD COLUMN IF NOT EXISTS resolution_note text;
 -- guessed name that misses is a no-op that leaves the bug in place and says
 -- nothing. This drops whatever unique constraint covers exactly (match_id,
 -- reporter), and does nothing if there is none.
+-- `attname` is `name`, not `text`, so both sides are cast explicitly: an
+-- unqualified `array_agg(attname) = ARRAY['match_id','reporter']` is a
+-- name[]-to-text[] comparison with no operator behind it, and the migration
+-- fails on it rather than finding nothing.
 DO $$
 DECLARE
     doomed text;
 BEGIN
     SELECT con.conname INTO doomed
       FROM pg_constraint con
-      JOIN pg_class rel ON rel.oid = con.conrelid
-     WHERE rel.relname = 'reports'
+     WHERE con.conrelid = 'reports'::regclass
        AND con.contype = 'u'
        AND (
-             SELECT array_agg(att.attname ORDER BY att.attname)
+             SELECT array_agg(att.attname::text ORDER BY att.attname::text)
                FROM unnest(con.conkey) AS k(attnum)
                JOIN pg_attribute att
                  ON att.attrelid = con.conrelid AND att.attnum = k.attnum
-           ) = ARRAY['match_id', 'reporter'];
+           ) = ARRAY['match_id', 'reporter']::text[]
+     LIMIT 1;
 
     IF doomed IS NOT NULL THEN
         EXECUTE format('ALTER TABLE reports DROP CONSTRAINT %I', doomed);
